@@ -78,7 +78,16 @@ exports[`ProposalCard matches the visual baseline for a pending proposal without
               ],
               "tag": "span",
             },
-            "· Ends in 10d",
+            "·",
+            {
+              "attrs": {
+                "title": "Jun 11, 2026, 12:00 AM UTC",
+              },
+              "children": [
+                "Ends in 10 days",
+              ],
+              "tag": "time",
+            },
           ],
           "tag": "p",
         },
@@ -175,7 +184,16 @@ exports[`ProposalCard matches the visual baseline for a proposal that has ended 
               ],
               "tag": "span",
             },
-            "· Ended 3d ago",
+            "·",
+            {
+              "attrs": {
+                "title": "May 29, 2026, 12:00 AM UTC",
+              },
+              "children": [
+                "Ended 3 days ago",
+              ],
+              "tag": "time",
+            },
           ],
           "tag": "p",
         },
@@ -344,7 +362,16 @@ exports[`ProposalCard matches the visual baseline for an active proposal with vo
               ],
               "tag": "span",
             },
-            "· Ends in 5d",
+            "·",
+            {
+              "attrs": {
+                "title": "Jun 6, 2026, 12:00 AM UTC",
+              },
+              "children": [
+                "Ends in 5 days",
+              ],
+              "tag": "time",
+            },
           ],
           "tag": "p",
         },
