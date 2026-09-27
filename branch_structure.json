@@ -1,0 +1,21 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "feat/relative-proposal-timings",
+    "feat/veto-reason",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "feat/relative-proposal-timings": "main",
+    "feat/veto-reason": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "feat/relative-proposal-timings",
+    "feat/veto-reason",
+    "origin"
+  ]
+}

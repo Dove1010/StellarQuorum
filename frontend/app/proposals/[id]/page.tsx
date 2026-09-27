@@ -5,6 +5,7 @@ import StatusBadge from "@/components/StatusBadge";
 import VoteBar from "@/components/VoteBar";
 import VoteButtons from "@/components/VoteButtons";
 import VotingPowerPreview from "@/components/VotingPowerPreview";
+import { describeDeadline, formatAbsolute, formatRelative } from "@/lib/time";
 
 export default async function ProposalDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -24,6 +25,7 @@ export default async function ProposalDetailPage({ params }: { params: Promise<{
   const againstPct = total > 0 ? ((proposal.againstVotes / total) * 100).toFixed(1) : "0.0";
   const abstainPct = total > 0 ? ((proposal.abstainVotes / total) * 100).toFixed(1) : "0.0";
   const quorumReached = total >= proposal.quorumRequired;
+  const deadline = describeDeadline(proposal);
 
   const choiceColors: Record<string, string> = {
     for: "text-emerald-400",
@@ -47,7 +49,14 @@ export default async function ProposalDetailPage({ params }: { params: Promise<{
         <h1 className="text-3xl font-bold text-white mb-4">{proposal.title}</h1>
         <div className="flex items-center gap-6 text-sm text-slate-500">
           <span className="flex items-center gap-1.5"><User size={13} /> {proposal.proposer}</span>
-          <span className="flex items-center gap-1.5"><Clock size={13} /> Voting {new Date(proposal.startTime).toLocaleDateString()} – {new Date(proposal.endTime).toLocaleDateString()}</span>
+          <span className="flex items-center gap-1.5"><Clock size={13} />
+            <time
+              dateTime={deadline.iso}
+              title={`Voting ${formatAbsolute(proposal.startTime)} – ${formatAbsolute(proposal.endTime)}`}
+            >
+              {deadline.label}
+            </time>
+          </span>
         </div>
       </div>
 
@@ -130,7 +139,11 @@ export default async function ProposalDetailPage({ params }: { params: Promise<{
                     <td className="py-2 pr-4 font-mono text-xs text-slate-400">{vote.voter}</td>
                     <td className={`py-2 pr-4 font-semibold capitalize ${choiceColors[vote.choice]}`}>{vote.choice}</td>
                     <td className="py-2 pr-4 text-slate-400">{(vote.weight / 1000).toFixed(0)}K</td>
-                    <td className="py-2 text-slate-500 text-xs">{new Date(vote.timestamp).toLocaleDateString()}</td>
+                    <td className="py-2 text-slate-500 text-xs">
+                      <time dateTime={vote.timestamp} title={formatAbsolute(vote.timestamp)}>
+                        {formatRelative(vote.timestamp)}
+                      </time>
+                    </td>
                   </tr>
                 ))}
               </tbody>
