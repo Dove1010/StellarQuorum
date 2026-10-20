@@ -24,6 +24,7 @@ export default function Navbar() {
         <div className="flex items-center gap-6 text-sm text-slate-400">
           <Link href="/proposals" className="hover:text-slate-200 hover:underline underline-offset-4 transition-colors">{t("nav.proposals")}</Link>
           <Link href="/create" className="hover:text-slate-200 hover:underline underline-offset-4 transition-colors">{t("nav.create")}</Link>
+          <Link href="/delegation" className="hover:text-slate-200 hover:underline underline-offset-4 transition-colors">Delegation</Link>
           {address ? (
             <button
               onClick={disconnect}
