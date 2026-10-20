@@ -15,9 +15,14 @@ const FILTERS: { label: string; value: ProposalStatus | "all" }[] = [
 
 export default function ProposalList({ proposals }: { proposals: Proposal[] }) {
   const [filter, setFilter] = useState<ProposalStatus | "all">("all");
+  const [sort, setSort] = useState<"recent" | "votes" | "title">("recent");
   const activeCount = proposals.filter(p => p.status === 'active').length;
 
-  const filtered = filter === "all" ? proposals : proposals.filter(p => p.status === filter);
+  const filtered = [...(filter === "all" ? proposals : proposals.filter(p => p.status === filter))].sort((a, b) => {
+    if (sort === "votes") return (b.forVotes + b.againstVotes + b.abstainVotes) - (a.forVotes + a.againstVotes + a.abstainVotes);
+    if (sort === "title") return a.title.localeCompare(b.title);
+    return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
+  });
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
@@ -46,6 +51,14 @@ export default function ProposalList({ proposals }: { proposals: Proposal[] }) {
             )}
           </button>
         ))}
+      </div>
+      <div className="mb-6 flex items-center gap-3">
+        <label htmlFor="proposal-sort" className="text-sm text-slate-400">Sort proposals</label>
+        <select id="proposal-sort" value={sort} onChange={event => setSort(event.target.value as typeof sort)} className="rounded-md border border-[#1e2d40] bg-[#0d1520] px-3 py-2 text-sm text-slate-300">
+          <option value="recent">Most recent</option>
+          <option value="votes">Most votes</option>
+          <option value="title">Title</option>
+        </select>
       </div>
 
       {filtered.length === 0 ? (
