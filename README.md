@@ -109,6 +109,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide, the
 - **Architecture:** Contract architecture and data flow in the [Architecture doc](docs/architecture.md)
 - **Deployment:** Deploy contracts to testnet/mainnet with the [Deployment Guide](docs/deployment.md)
 - **Delegate incentives:** Design thinking for delegate reward programs in the [Delegate Incentive Program](docs/delegate-incentive-program.md)
+- **Governance comparisons:** Quorum, OpenZeppelin Governor, and Governor Bravo in the [Governance Comparison](docs/governance-comparison.md)
+- **Paired feature test plans:** Conviction voting, proposal templates, and notification center in the [Feature Test Plans](docs/feature-test-plans.md)
 
 ---
 
