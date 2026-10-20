@@ -85,6 +85,30 @@ until a later release marks them as implemented.
 `GovernanceError` and `TokenError` mirror the Rust `#[contracterror]` enums;
 `parseGovernanceError(error)` maps `Error(Contract, #N)` to a code.
 
+## Optional read cache
+
+Caching is disabled by default and is local to each client. Enable it with
+`cache: { enabled: true, ttlMs: 5_000, methodTtlMs: { getConfig: 60_000 } }`
+in `QuorumClientConfig`. TTLs are milliseconds, start after a successful RPC,
+and can be set to zero to disable a method. Entries are keyed by method and
+arguments; `maxEntries` bounds memory (default 1000). Errors are never cached,
+and returned objects can be modified without changing the cached value.
+
+Every single read accepts a final options argument:
+
+```typescript
+await client.getProposal(7n, { bypassCache: true }); // fresh, leaves cache alone
+await client.getConfig({ invalidateCache: true }); // evict, fetch, and cache
+client.invalidateCache('getProposal', 7n);         // evict this proposal
+client.invalidateCache('getVote');                // evict every vote
+client.invalidateCache();                         // evict everything
+```
+
+Proposal-list options also accept `bypassCache` and `invalidateCache`, applied
+to the count and every proposal in the window. `hasVoted` shares `getVote`'s
+cache. After submitting a write, invalidate the affected reads or bypass the
+cache when immediate freshness matters; no write automatically clears it.
+
 ## Contributor notes
 
 Run `npm ci`, `npm run build`, and `npm run test:browser` in `sdk/` to

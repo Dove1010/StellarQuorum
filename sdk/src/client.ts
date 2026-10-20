@@ -1,5 +1,6 @@
 import { rpc, Contract, TransactionBuilder, BASE_FEE, nativeToScVal, scValToNative, Address, Account, xdr } from '@stellar/stellar-sdk';
-import type { Proposal, GovernanceConfig, QuorumClientConfig, VoteSupport, GetProposalsOptions, ProposalStatus, TransactionConfirmationOptions } from './types.js';
+import type { Proposal, GovernanceConfig, QuorumClientConfig, VoteSupport, GetProposalsOptions, ProposalStatus, TransactionConfirmationOptions, ReadMethod, ReadOptions } from './types.js';
+import { ReadCache } from './cache.js';
 import { GovernanceError, parseGovernanceError, RpcTimeoutError, TransactionFailedError, contractErrorCode } from './errors.js';
 
 /**
@@ -114,9 +115,11 @@ export class QuorumClient {
   private governance: Contract;
   private token: Contract | null;
   private config: QuorumClientConfig;
+  private readonly cache: ReadCache;
 
   constructor(config: QuorumClientConfig) {
     this.config = config;
+    this.cache = new ReadCache(config.cache);
     this.server = new rpc.Server(config.rpcUrl, {
       allowHttp: allowsInsecureRpc(config.rpcUrl),
       timeout: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -130,8 +133,14 @@ export class QuorumClient {
 
   // ─── Read ────────────────────────────────────────────────────────────────
 
+  /** Evict all reads, one method, or one method + arguments. */
+  invalidateCache(method?: ReadMethod, ...args: unknown[]): void {
+    this.cache.invalidate(method, args.length ? args : undefined);
+  }
+
   /** A proposal by id, or `null` if the contract reports ProposalNotFound. */
-  async getProposal(id: bigint): Promise<Proposal | null> {
+  async getProposal(id: bigint, options?: ReadOptions): Promise<Proposal | null> {
+    return this.cache.read('getProposal', [id], options, async () => {
     try {
       const raw = await this.simulate<RawProposal>('get_proposal', nativeToScVal(id, { type: 'u64' }));
       return decodeProposal(raw);
@@ -139,32 +148,42 @@ export class QuorumClient {
       if (parseGovernanceError(error) === GovernanceError.ProposalNotFound) return null;
       throw error;
     }
+    });
   }
 
-  async getProposalCount(): Promise<bigint> {
-    return BigInt(await this.simulate<bigint | number>('get_proposal_count'));
+  async getProposalCount(options?: ReadOptions): Promise<bigint> {
+    return this.cache.read('getProposalCount', [], options, async () =>
+      BigInt(await this.simulate<bigint | number>('get_proposal_count')));
   }
 
-  async getLatestLedger(): Promise<number> {
-    return (await this.read('getLatestLedger', () => this.server.getLatestLedger())).sequence;
+  async getLatestLedger(options?: ReadOptions): Promise<number> {
+    return this.cache.read('getLatestLedger', [], options, async () =>
+      (await this.read('getLatestLedger', () => this.server.getLatestLedger())).sequence);
   }
 
-  async getVotingPower(voter: string, snapshotLedger: number): Promise<bigint> {
-    const token = await this.tokenContract();
+  async getVotingPower(voter: string, snapshotLedger: number, options?: ReadOptions): Promise<bigint> {
+    return this.cache.read('getVotingPower', [voter, snapshotLedger], options, async () => {
+    const token = await this.tokenContract(options);
     return BigInt(await this.simulateOn<bigint | number>(token, 'get_past_balance', new Address(voter).toScVal(), nativeToScVal(snapshotLedger, { type: 'u32' })));
+    });
   }
 
-  async getBalance(voter: string): Promise<bigint> {
-    const token = await this.tokenContract();
+  async getBalance(voter: string, options?: ReadOptions): Promise<bigint> {
+    return this.cache.read('getBalance', [voter], options, async () => {
+    const token = await this.tokenContract(options);
     return BigInt(await this.simulateOn<bigint | number>(token, 'balance', new Address(voter).toScVal()));
+    });
   }
 
-  async getTokenDecimals(): Promise<number> {
-    const token = await this.tokenContract();
+  async getTokenDecimals(options?: ReadOptions): Promise<number> {
+    return this.cache.read('getTokenDecimals', [], options, async () => {
+    const token = await this.tokenContract(options);
     return this.simulateOn<number>(token, 'decimals');
+    });
   }
 
-  async getConfig(): Promise<GovernanceConfig> {
+  async getConfig(options?: ReadOptions): Promise<GovernanceConfig> {
+    return this.cache.read('getConfig', [], options, async () => {
     const raw = await this.simulate<RawConfig>('get_config');
     return {
       token: raw.token,
@@ -174,12 +193,13 @@ export class QuorumClient {
       proposalThreshold: raw.proposal_threshold,
       admin: raw.admin,
     };
+    });
   }
 
-  async hasVoted(proposalId: bigint, voter: string): Promise<boolean> {
+  async hasVoted(proposalId: bigint, voter: string, options?: ReadOptions): Promise<boolean> {
     // has_voted and get_vote read the same storage entry, so one round trip
     // answers both questions.
-    return (await this.getVote(proposalId, voter)) !== null;
+    return (await this.getVote(proposalId, voter, options)) !== null;
   }
 
   /**
@@ -190,7 +210,8 @@ export class QuorumClient {
    * @param voter Stellar address of the voter.
    * @returns `0` Against, `1` For, `2` Abstain, or `null`.
    */
-  async getVote(proposalId: bigint, voter: string): Promise<VoteSupport | null> {
+  async getVote(proposalId: bigint, voter: string, options?: ReadOptions): Promise<VoteSupport | null> {
+    return this.cache.read('getVote', [proposalId, voter], options, async () => {
     const support = await this.simulate<number | null | undefined>(
       'get_vote',
       nativeToScVal(proposalId, { type: 'u64' }),
@@ -198,6 +219,7 @@ export class QuorumClient {
     );
     // The contract returns Option<u32>; None decodes to null/undefined.
     return support === null || support === undefined ? null : (support as VoteSupport);
+    });
   }
 
   async getProposalsByStatus(status: Proposal['status'], options?: GetProposalsOptions): Promise<Proposal[]> {
@@ -225,7 +247,7 @@ export class QuorumClient {
   async getProposals(options?: GetProposalsOptions): Promise<Proposal[]> {
     const limit = options?.limit ?? DEFAULT_PAGE_SIZE;
     const offset = options?.offset ?? 0;
-    return this.fetchProposalWindow(offset, limit);
+    return this.fetchProposalWindow(offset, limit, options);
   }
 
   /**
@@ -238,24 +260,24 @@ export class QuorumClient {
    */
   async getAllProposals(options?: GetProposalsOptions): Promise<Proposal[]> {
     if (!options || (options.limit === undefined && options.offset === undefined)) {
-      const count = await this.getProposalCount();
+      const count = await this.getProposalCount(options);
       const proposals = await Promise.all(
-        Array.from({ length: Number(count) }, (_, i) => this.getProposal(BigInt(i + 1)))
+        Array.from({ length: Number(count) }, (_, i) => this.getProposal(BigInt(i + 1), options))
       );
       return proposals.filter(Boolean) as Proposal[];
     }
     const offset = options.offset ?? 0;
     // No explicit limit means "everything from offset onwards".
     if (options.limit === undefined) {
-      const count = await this.getProposalCount();
+      const count = await this.getProposalCount(options);
       const total = Number(count);
       const remaining = Math.max(0, total - offset);
-      return this.fetchProposalWindow(offset, remaining);
+      return this.fetchProposalWindow(offset, remaining, options);
     }
-    return this.fetchProposalWindow(offset, options.limit);
+    return this.fetchProposalWindow(offset, options.limit, options);
   }
 
-  private async fetchProposalWindow(offset: number, limit: number): Promise<Proposal[]> {
+  private async fetchProposalWindow(offset: number, limit: number, options?: ReadOptions): Promise<Proposal[]> {
     if (!Number.isInteger(offset) || offset < 0) {
       throw new Error(`Invalid offset ${String(offset)}: must be a non-negative integer`);
     }
@@ -265,7 +287,7 @@ export class QuorumClient {
     if (limit === 0) {
       return [];
     }
-    const count = await this.getProposalCount();
+    const count = await this.getProposalCount(options);
     const total = Number(count);
     if (offset >= total) {
       return [];
@@ -276,7 +298,7 @@ export class QuorumClient {
     for (let id = offset + 1; id <= end; id += 1) {
       ids.push(BigInt(id));
     }
-    const proposals = await Promise.all(ids.map(id => this.getProposal(id)));
+    const proposals = await Promise.all(ids.map(id => this.getProposal(id, options)));
     return proposals.filter(Boolean) as Proposal[];
   }
 
@@ -294,40 +316,40 @@ export class QuorumClient {
   /**
    * Live QUORUM balance of `owner`.
    */
-  async balance(owner: string): Promise<bigint> {
-    return this.simulateToken<bigint>(
+  async balance(owner: string, options?: ReadOptions): Promise<bigint> {
+    return this.cache.read('balance', [owner], options, () => this.simulateToken<bigint>(
       'balance',
       new Address(owner).toScVal(),
-    );
+    ));
   }
 
   /**
    * Balance of `owner` as of the end of `ledger` (snapshot voting power).
    */
-  async getPastBalance(owner: string, ledger: number): Promise<bigint> {
-    return this.simulateToken<bigint>(
+  async getPastBalance(owner: string, ledger: number, options?: ReadOptions): Promise<bigint> {
+    return this.cache.read('getPastBalance', [owner, ledger], options, () => this.simulateToken<bigint>(
       'get_past_balance',
       new Address(owner).toScVal(),
       nativeToScVal(ledger, { type: 'u32' }),
-    );
+    ));
   }
 
   /**
    * Amount `spender` may still draw from `owner` (0 once expired).
    */
-  async allowance(owner: string, spender: string): Promise<bigint> {
-    return this.simulateToken<bigint>(
+  async allowance(owner: string, spender: string, options?: ReadOptions): Promise<bigint> {
+    return this.cache.read('allowance', [owner, spender], options, () => this.simulateToken<bigint>(
       'allowance',
       new Address(owner).toScVal(),
       new Address(spender).toScVal(),
-    );
+    ));
   }
 
   /**
    * Total QUORUM supply.
    */
-  async totalSupply(): Promise<bigint> {
-    return this.simulateToken<bigint>('total_supply');
+  async totalSupply(options?: ReadOptions): Promise<bigint> {
+    return this.cache.read('totalSupply', [], options, () => this.simulateToken<bigint>('total_supply'));
   }
 
   // ─── Internals ───────────────────────────────────────────────────────────
@@ -339,11 +361,11 @@ export class QuorumClient {
    * governance config is the authority, so a caller that only knows the
    * governance contract still gets correct balances.
    */
-  private async tokenContract(): Promise<Contract> {
+  private async tokenContract(options?: ReadOptions): Promise<Contract> {
     if (this.config.tokenContractId) {
       return new Contract(this.config.tokenContractId);
     }
-    const { token } = await this.getConfig();
+    const { token } = await this.getConfig(options);
     return new Contract(token);
   }
 

@@ -40,6 +40,29 @@ export interface QuorumClientConfig {
   retryJitterMs?: number;
   pollIntervalMs?: number;
   confirmationTimeoutMs?: number;
+  /** Read caching is off unless cache.enabled is true. TTLs are milliseconds. */
+  cache?: ReadCacheConfig;
+}
+
+export type ReadMethod =
+  | 'getProposal' | 'getProposalCount' | 'getConfig' | 'getVote'
+  | 'getLatestLedger' | 'getVotingPower' | 'getBalance' | 'getTokenDecimals'
+  | 'balance' | 'getPastBalance' | 'allowance' | 'totalSupply';
+
+export interface ReadCacheConfig {
+  enabled: boolean;
+  /** Default 5 seconds; zero disables caching for a method. */
+  ttlMs?: number;
+  methodTtlMs?: Partial<Record<ReadMethod, number>>;
+  /** Maximum entries retained per client, default 1000. */
+  maxEntries?: number;
+}
+
+export interface ReadOptions {
+  /** Fetch fresh data without reading or populating the cache. */
+  bypassCache?: boolean;
+  /** Evict this method + arguments before fetching and caching fresh data. */
+  invalidateCache?: boolean;
 }
 
 export interface TransactionConfirmationOptions {
@@ -59,7 +82,7 @@ export interface NetworkConfig {
  * the maximum number of proposals to return. When omitted, callers that pass
  * no options get the historical behaviour (all proposals).
  */
-export interface GetProposalsOptions {
+export interface GetProposalsOptions extends ReadOptions {
   limit?: number;
   offset?: number;
 }
