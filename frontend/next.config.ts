@@ -64,6 +64,9 @@ export function buildCsp(rpcUrl: string | undefined, isDev: boolean): string {
     "img-src": ["'self'", "data:", "blob:", "https:"],
     "font-src": ["'self'", "data:"],
     "connect-src": connect,
+    // Service worker registration requires worker-src or falls back to script-src.
+    // The worker is served from the same origin as the app.
+    "worker-src": ["'self'"],
   };
 
   if (!isDev) {

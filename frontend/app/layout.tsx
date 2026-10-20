@@ -6,6 +6,7 @@ import Footer from "@/components/Footer";
 import WalletProvider from "@/components/WalletProvider";
 import { RpcHealthProvider } from "@/lib/rpc-health";
 import { getLocale, t } from "@/lib/i18n";
+import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
 
 /*
  * Issue #145: both faces come from next/font, which downloads them at build
@@ -60,6 +61,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             <Footer />
           </RpcHealthProvider>
         </WalletProvider>
+        <ServiceWorkerRegistration />
       </body>
     </html>
   );
