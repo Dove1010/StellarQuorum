@@ -64,6 +64,13 @@ Covers `proposal_created`, `vote_cast`, `proposal_finalized`,
 `mint`, `burn`, `approve` and `admin_transferred`. Unknown topics decode to
 `null` instead of throwing.
 
+## Python read-only bindings
+
+Python services can install the governance query package from source. See
+[the Python SDK README](python/README.md) for installation, typed result
+shapes, and examples of `get_proposal`, `get_all_proposals`, `get_config`,
+and `get_vote`. Write transaction building is outside its scope.
+
 ## Method status
 
 The following `QuorumClient` methods are implemented:
