@@ -190,6 +190,8 @@ jobs:
       # exports map, and the Freighter helper must stay out of the root entry.
       - name: Smoke test (ESM + CJS)
         run: cd sdk && npm run test:smoke
+      - name: Browser compatibility smoke test (ESM)
+        run: cd sdk && npm run test:browser
       # Issue #129: encoding/decoding tests against a mocked RPC, plus the
       # error-enum drift check against the Rust contracts (#130).
       - name: Test

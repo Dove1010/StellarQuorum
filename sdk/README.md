@@ -85,6 +85,15 @@ until a later release marks them as implemented.
 `GovernanceError` and `TokenError` mirror the Rust `#[contracterror]` enums;
 `parseGovernanceError(error)` maps `Error(Contract, #N)` to a code.
 
+## Contributor notes
+
+Run `npm ci`, `npm run build`, and `npm run test:browser` in `sdk/` to
+check browser compatibility. CI bundles the emitted ESM entry with esbuild's
+browser target, rejects Node built-in imports (including `node:` imports),
+and loads the bundle without Node globals such as `Buffer` or `process`.
+Dependencies are bundled too, using their browser exports; do not externalize
+them or add Node polyfills to hide a failing shared SDK code path.
+
 ## Releasing
 
 See [docs/publishing.md](https://github.com/StellarQuorum/StellarQuorum/blob/main/docs/publishing.md)
