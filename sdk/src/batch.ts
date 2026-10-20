@@ -109,7 +109,10 @@ export async function postSimulationBatch(url: string, transactions: string[], t
     });
     if (!response.ok) throw Object.assign(new Error(`Batch simulation HTTP ${response.status}`), { status: response.status });
     // A provider returning HTML or invalid JSON cannot accept our batch.
-    try { return await response.json(); } catch { return undefined; }
+    try { return await response.json(); } catch (error) {
+      if (controller.signal.aborted) throw error;
+      return undefined;
+    }
   } catch (error) {
     if (controller.signal.aborted) throw new Error('Batch simulation timeout');
     throw error;

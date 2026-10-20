@@ -9,7 +9,7 @@ const CONTRACT = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
 const SOURCE = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 const NETWORK = 'Test SDF Network ; September 2015';
 interface Request { jsonrpc: string; id: number; method: string; params: { transaction: string } }
-type Mode = 'supported' | 'rejected' | 'http-rejected' | 'missing-id' | 'duplicate-id' | 'invalid-json' | 'missing-result' | 'contract-error' | 'rpc-error' | 'timeout' | 'transient';
+type Mode = 'supported' | 'rejected' | 'http-rejected' | 'missing-id' | 'duplicate-id' | 'invalid-json' | 'missing-result' | 'contract-error' | 'rpc-error' | 'timeout' | 'body-timeout' | 'transient';
 let server: Server;
 let rpcUrl: string;
 let requests: (Request | Request[])[];
@@ -52,6 +52,7 @@ beforeAll(async () => {
     res.setHeader('Content-Type', 'application/json');
     if (!Array.isArray(request)) { res.end(JSON.stringify(result(request))); return; }
     if (mode === 'timeout') return;
+    if (mode === 'body-timeout') { res.writeHead(200); res.write('['); return; }
     if (mode === 'http-rejected') { res.writeHead(400).end(); return; }
     if (mode === 'transient' && requests.filter(Array.isArray).length === 1) { res.writeHead(503).end(); return; }
     if (mode === 'invalid-json') { res.end('<html>unsupported</html>'); return; }
@@ -120,9 +121,10 @@ test('retries transient HTTP errors without falling back', async () => {
   expect(requests).toHaveLength(3);
 });
 
-test('times out and aborts a stalled batch', async () => {
-  mode = 'timeout';
+test.each(['timeout', 'body-timeout'] as Mode[])('times out and aborts a stalled batch (%s)', async stalled => {
+  mode = stalled;
   await expect(client(true, { requestTimeoutMs: 200 }).getProposals({ limit: 3 })).rejects.toBeInstanceOf(RpcTimeoutError);
+  expect(requests).toHaveLength(2); // count + batch, without fallback
 });
 
 test('empty/singleton pages skip batching and invalid windows do not send requests', async () => {
