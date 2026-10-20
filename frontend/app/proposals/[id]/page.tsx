@@ -7,6 +7,7 @@ import VoteBar from "@/components/VoteBar";
 import VoteButtons from "@/components/VoteButtons";
 import VoterList from "@/components/VoterList";
 import VotingPowerPreview from "@/components/VotingPowerPreview";
+import AddToCalendar from "@/components/AddToCalendar";
 import { formatDate, formatNumber, t } from "@/lib/i18n";
 
 export default async function ProposalDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -41,9 +42,10 @@ export default async function ProposalDetailPage({ params }: { params: Promise<{
           <span className="text-xs text-slate-500 font-mono ml-auto">{proposal.id}</span>
         </div>
         <h1 className="text-3xl font-bold text-white mb-4">{proposal.title}</h1>
-        <div className="flex items-center gap-6 text-sm text-slate-500">
+        <div className="flex items-center gap-6 text-sm text-slate-500 flex-wrap">
           <span className="flex items-center gap-1.5"><User size={13} /> {proposal.proposer}</span>
           <span className="flex items-center gap-1.5"><Clock size={13} /> {t("proposals.votingDates", { start: formatDate(proposal.startTime), end: formatDate(proposal.endTime) })}</span>
+          <AddToCalendar proposal={proposal} />
         </div>
       </div>
 

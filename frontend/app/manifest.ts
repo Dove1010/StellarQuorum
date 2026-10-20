@@ -17,6 +17,8 @@ export default function manifest(): MetadataRoute.Manifest {
     // a query string makes the browser treat every campaign link as its own app.
     id: "/",
     start_url: "/",
+    // Standalone mode makes the app installable as a PWA with its own window.
+    display: "standalone",
     // The app's own dark surface, so a launched window is not a white flash
     // before the first paint. Matches the body background in globals.css.
     background_color: "#080c10",

@@ -37,6 +37,7 @@ describe("security headers", () => {
     expect(directive(policy, "form-action")).toEqual(["'self'"]);
     expect(directive(policy, "frame-ancestors")).toEqual(["'none'"]);
     expect(directive(policy, "script-src")).toContain("'self'");
+    expect(directive(policy, "worker-src")).toEqual(["'self'"]);
   });
 
   it("permits the configured Soroban RPC endpoint", () => {

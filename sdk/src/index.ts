@@ -20,4 +20,4 @@ export type {
   TransferEvent,
   VoteCastEvent,
 } from './events.js';
-export type { Proposal, ProposalStatus, GovernanceConfig, QuorumClientConfig, VoteSupport, GetProposalsOptions, TransactionConfirmationOptions } from './types.js';
+export type { Proposal, ProposalStatus, GovernanceConfig, QuorumClientConfig, VoteSupport, GetProposalsOptions, TransactionConfirmationOptions, ReadMethod, ReadCacheConfig, ReadOptions } from './types.js';

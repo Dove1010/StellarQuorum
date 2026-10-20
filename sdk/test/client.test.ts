@@ -205,6 +205,42 @@ it('getLatestLedger returns the RPC sequence', async () => {
 // it, and get_past_votes has to be given the snapshot ledger rather than the
 // latest one, or the weight shown before signing is the wrong number.
 describe('voting power', () => {
+  it('caches delegated snapshots separately from raw balances and supports fresh reads', async () => {
+    const scoped = new QuorumClient({
+      ...TESTNET,
+      governanceContractId: CONTRACT,
+      tokenContractId: TOKEN,
+      cache: { enabled: true },
+    } as QuorumClientConfig);
+
+    returns(nativeToScVal(250n, { type: 'i128' }));
+    expect(await scoped.getVotingPower(VOTER, 999)).toBe(250n);
+    expect(callAddress()).toBe(TOKEN);
+    expect(lastCall().method).toBe('get_past_votes');
+    expect(scValToNative(lastCall().args[1])).toBe(999);
+    expect(await scoped.getVotingPower(VOTER, 999)).toBe(250n);
+    expect(simulate).toHaveBeenCalledTimes(1);
+
+    returns(nativeToScVal(7n, { type: 'i128' }));
+    expect(await scoped.getPastBalance(VOTER, 999)).toBe(7n);
+    expect(lastCall().method).toBe('get_past_balance');
+
+    returns(nativeToScVal(400n, { type: 'i128' }));
+    expect(await scoped.getVotingPower(VOTER, 1000)).toBe(400n);
+    expect(lastCall().method).toBe('get_past_votes');
+    expect(scValToNative(lastCall().args[1])).toBe(1000);
+    expect(simulate).toHaveBeenCalledTimes(3);
+
+    returns(nativeToScVal(300n, { type: 'i128' }));
+    expect(await scoped.getVotingPower(VOTER, 999, { bypassCache: true })).toBe(300n);
+    expect(await scoped.getVotingPower(VOTER, 999)).toBe(250n);
+
+    returns(nativeToScVal(350n, { type: 'i128' }));
+    expect(await scoped.getVotingPower(VOTER, 999, { invalidateCache: true })).toBe(350n);
+    expect(await scoped.getVotingPower(VOTER, 999)).toBe(350n);
+    expect(simulate).toHaveBeenCalledTimes(5);
+  });
+
   it('getVotingPower encodes (voter, snapshot_ledger) against the token', async () => {
     returns(nativeToScVal(250n, { type: 'i128' }));
     expect(await client.getVotingPower(VOTER, 999)).toBe(250n);

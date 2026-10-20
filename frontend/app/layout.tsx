@@ -4,7 +4,9 @@ import "./globals.css";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import WalletProvider from "@/components/WalletProvider";
+import { RpcHealthProvider } from "@/lib/rpc-health";
 import { getLocale, t } from "@/lib/i18n";
+import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
 
 /*
  * Issue #145: both faces come from next/font, which downloads them at build
@@ -36,6 +38,11 @@ export const metadata: Metadata = {
   // app/favicon.ico, app/apple-icon.png and app/manifest.ts — see
   // scripts/generate-icons.mjs for the artwork.
   applicationName: "Quorum",
+  alternates: {
+    types: {
+      "application/rss+xml": [{ url: "/feed.xml", title: "Quorum Governance Proposals" }],
+    },
+  },
 };
 
 // Issue #144: the app is dark on every surface, so the browser chrome has to be
@@ -53,10 +60,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     >
       <body className="min-h-full flex flex-col bg-[#080c10] text-slate-100">
         <WalletProvider>
-          <Navbar />
-          <main className="flex-1">{children}</main>
-          <Footer />
+          <RpcHealthProvider>
+            <Navbar />
+            <main className="flex-1">{children}</main>
+            <Footer />
+          </RpcHealthProvider>
         </WalletProvider>
+        <ServiceWorkerRegistration />
       </body>
     </html>
   );
