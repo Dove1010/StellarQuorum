@@ -3,6 +3,8 @@ import { Scale, Vote, CheckSquare, ArrowRight } from "lucide-react";
 import { formatNumber, t } from "@/lib/i18n";
 import { getProposals } from "@/lib/proposals";
 import ProposalCard from "@/components/ProposalCard";
+import DigestSignup from "@/components/DigestSignup";
+import GlossaryTooltip from "@/components/GlossaryTooltip";
 
 // Read on-chain state per request rather than baking it in at build time.
 export const dynamic = "force-dynamic";
@@ -91,6 +93,14 @@ export default async function Home() {
                 <p className="text-sm text-slate-400 leading-relaxed">{s.desc}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+      <section className="mx-auto w-full max-w-5xl px-6 py-12">
+        <div className="grid gap-6 md:grid-cols-[1fr_1.4fr]">
+          <DigestSignup />
+          <div className="rounded-xl border border-[#1a2535] bg-[#0d1520] p-5 text-sm text-slate-400">
+            <p><GlossaryTooltip term="Snapshot ledger" definition="The ledger recorded when a proposal opened; voting power is measured at this point in history." /> is the balance checkpoint used to weight votes.</p>
           </div>
         </div>
       </section>
