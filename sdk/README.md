@@ -64,6 +64,13 @@ Covers `proposal_created`, `vote_cast`, `proposal_finalized`,
 `mint`, `burn`, `approve` and `admin_transferred`. Unknown topics decode to
 `null` instead of throwing.
 
+## Python read-only bindings
+
+Python services can install the governance query package from source. See
+[the Python SDK README](python/README.md) for installation, typed result
+shapes, and examples of `get_proposal`, `get_all_proposals`, `get_config`,
+and `get_vote`. Write transaction building is outside its scope.
+
 ## Method status
 
 The following `QuorumClient` methods are implemented:
@@ -84,6 +91,68 @@ until a later release marks them as implemented.
 
 `GovernanceError` and `TokenError` mirror the Rust `#[contracterror]` enums;
 `parseGovernanceError(error)` maps `Error(Contract, #N)` to a code.
+
+## Optional batch simulations
+
+Set `batchSimulation: true` in `QuorumClientConfig` to coalesce concurrent
+proposal reads into JSON-RPC batch HTTP requests. `getProposals()` and
+`getAllProposals()` use this path, with the same ordered `Proposal[]` return
+value. `simulationBatchSize` is 1..100 (default 50). Caching still applies;
+only cache misses are simulated. A singleton uses an individual request.
+
+Batching is opt-in because provider policies differ. The reference Stellar RPC
+[configures a jrpc2 HTTP bridge](https://github.com/stellar/stellar-rpc/blob/main/cmd/stellar-rpc/internal/jsonrpc.go),
+whose [HTTP handler accepts batch requests](https://pkg.go.dev/github.com/creachadair/jrpc2/jhttp).
+The JS Stellar SDK does not expose a batch simulation method, so this SDK
+sends an array of `simulateTransaction` requests using native `fetch`.
+This combines HTTP requests, not operations inside a transaction: each
+simulation still contains exactly one contract invocation.
+
+Providers rejecting batches (HTTP rejection, non-array/invalid responses,
+missing/duplicate response IDs, or unsupported JSON-RPC envelopes) are retried
+with individual reads. That client stops probing thereafter. Batch responses
+are matched by ID, not array order. Contract errors retain individual-read
+semantics; timeouts, authentication errors, and exhausted transient retries
+surface to the caller. Only read simulations are batched.
+
+After `npm run build`, run `node bench/batch-simulate.bench.mjs` from `sdk/`
+to exercise both paths over a local mock HTTP provider. A 50-proposal page
+uses 51 HTTP requests individually and 2 with batching (count + batch),
+with identical decoded values. The benchmark measures HTTP request counts;
+its local elapsed times do not predict public-provider latency.
+
+## Optional read cache
+
+Caching is disabled by default and is local to each client. Enable it with
+`cache: { enabled: true, ttlMs: 5_000, methodTtlMs: { getConfig: 60_000 } }`
+in `QuorumClientConfig`. TTLs are milliseconds, start after a successful RPC,
+and can be set to zero to disable a method. Entries are keyed by method and
+arguments; `maxEntries` bounds memory (default 1000). Errors are never cached,
+and returned objects can be modified without changing the cached value.
+
+Every single read accepts a final options argument:
+
+```typescript
+await client.getProposal(7n, { bypassCache: true }); // fresh, leaves cache alone
+await client.getConfig({ invalidateCache: true }); // evict, fetch, and cache
+client.invalidateCache('getProposal', 7n);         // evict this proposal
+client.invalidateCache('getVote');                // evict every vote
+client.invalidateCache();                         // evict everything
+```
+
+Proposal-list options also accept `bypassCache` and `invalidateCache`, applied
+to the count and every proposal in the window. `hasVoted` shares `getVote`'s
+cache. After submitting a write, invalidate the affected reads or bypass the
+cache when immediate freshness matters; no write automatically clears it.
+
+## Contributor notes
+
+Run `npm ci`, `npm run build`, and `npm run test:browser` in `sdk/` to
+check browser compatibility. CI bundles the emitted ESM entry with esbuild's
+browser target, rejects Node built-in imports (including `node:` imports),
+and loads the bundle without Node globals such as `Buffer` or `process`.
+Dependencies are bundled too, using their browser exports; do not externalize
+them or add Node polyfills to hide a failing shared SDK code path.
 
 ## Releasing
 
