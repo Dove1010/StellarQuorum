@@ -60,4 +60,8 @@ describe("manifest", () => {
       expect(icon.purpose ?? "any").toBe("any");
     }
   });
+
+  it("declares standalone display for PWA installability", () => {
+    expect(result.display).toBe("standalone");
+  });
 });

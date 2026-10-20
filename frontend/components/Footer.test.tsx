@@ -3,6 +3,7 @@ import Footer from "./Footer";
 import { EXTERNAL_LINKS } from "@/lib/links";
 import { describeVisual } from "@/test/visual";
 import { expectNoA11yViolations } from "@/test/a11y";
+import { RpcHealthProvider } from "@/lib/rpc-health";
 
 // Issue #168: the footer's separator runs and muted colour are a deliberate
 // visual decision. Issue #140: the link row is now part of that chrome, and a
@@ -10,12 +11,20 @@ import { expectNoA11yViolations } from "@/test/a11y";
 // the attribute is asserted rather than left to review.
 describe("Footer", () => {
   it("matches the visual baseline", () => {
-    const { container } = render(<Footer />);
+    const { container } = render(
+      <RpcHealthProvider>
+        <Footer />
+      </RpcHealthProvider>
+    );
     expect(describeVisual(container.firstChild)).toMatchSnapshot();
   });
 
   it("links to the docs, the repository and the community channels", () => {
-    render(<Footer />);
+    render(
+      <RpcHealthProvider>
+        <Footer />
+      </RpcHealthProvider>
+    );
     const nav = screen.getByRole("navigation", { name: "Site resources" });
     for (const link of EXTERNAL_LINKS) {
       const anchor = within(nav).getByRole("link", { name: link.label });
@@ -33,7 +42,11 @@ describe("Footer", () => {
   });
 
   it("opens every external link in a new tab without leaking the opener", () => {
-    const { container } = render(<Footer />);
+    const { container } = render(
+      <RpcHealthProvider>
+        <Footer />
+      </RpcHealthProvider>
+    );
     const anchors = container.querySelectorAll("a");
     expect(anchors.length).toBe(EXTERNAL_LINKS.length);
     for (const anchor of Array.from(anchors)) {
@@ -49,7 +62,11 @@ describe("Footer", () => {
   });
 
   it("is accessible", () => {
-    const { container } = render(<Footer />);
+    const { container } = render(
+      <RpcHealthProvider>
+        <Footer />
+      </RpcHealthProvider>
+    );
     expectNoA11yViolations(container);
   });
 });
