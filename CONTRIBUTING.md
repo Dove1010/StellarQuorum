@@ -117,12 +117,13 @@ All test suites and verification checks must pass before opening or merging a pu
 
 ### Test Suites Overview
 
-| Suite | Scope / Package | Primary Command | CI Equivalent |
-|---|---|---|---|
-| **Contracts** | Unit and integration tests for Soroban contracts (`contracts/governance`, `contracts/token`) | `cd contracts && cargo test` | `cargo test` |
-| **Frontend** | Unit and component tests for Next.js app (`frontend/`) | `cd frontend && npm test` | `npm test` |
-| **SDK** | Client SDK tests (`sdk/`) | `cd sdk && npm test` | `npm test` |
-| **Integration Stubs** | Integration test stubs (`tests/`) | `cd frontend && npx jest ../tests` | `npx jest tests/` |
+| Suite | Scope / Package | Shortcut | Primary Command | CI Equivalent |
+|---|---|---|---|---|
+| **All Suites** | Runs contracts, frontend, SDK, and integration suites | `make test` | — | — |
+| **Contracts** | Unit and integration tests for Soroban contracts (`contracts/governance`, `contracts/token`) | `make test-contracts` | `cd contracts && cargo test` | `cargo test` |
+| **Frontend** | Unit and component tests for Next.js app (`frontend/`) | `make test-frontend` | `cd frontend && npm test` | `npm test` |
+| **SDK** | Client SDK tests (`sdk/`) | `make test-sdk` | `cd sdk && npm test` | `npm test` |
+| **Integration Stubs** | Integration test stubs (`tests/`) | `make test-integration` | `cd frontend && npx jest ../tests` | `npx jest tests/` |
 
 ### Local Network Lifecycle Test
 
@@ -212,6 +213,8 @@ The contract test suite tests proposal lifecycle management, token checkpointing
 ```bash
 cd contracts
 cargo test
+# Or shortcut from repo root:
+make test-contracts
 ```
 
 #### Run Tests for a Specific Contract
@@ -237,6 +240,13 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo audit --config audit.toml
 cd .. && bash scripts/check-wasm-size.sh   # wasm size regression check
+
+# Or run individual shortcuts from repo root:
+make build-contracts
+make lint-contracts  # or: make clippy
+make test-contracts
+make audit-contracts
+make check-wasm-size
 ```
 
 ### 2. Frontend (`frontend/`)
@@ -247,6 +257,8 @@ The frontend test suite uses Jest and `@testing-library/react` via Next.js's bui
 ```bash
 cd frontend
 npm test
+# Or shortcut from repo root:
+make test-frontend
 ```
 
 #### Run Tests in Watch Mode
@@ -264,6 +276,12 @@ npm run lint
 npm test
 npm run build
 npm audit --audit-level=high
+
+# Or run individual shortcuts from repo root:
+make lint-frontend
+make test-frontend
+make build-frontend
+make audit-frontend
 ```
 
 ### 3. TypeScript SDK (`sdk/`)
@@ -274,6 +292,8 @@ The SDK suite verifies typed client methods, RPC simulation wrappers, and transa
 ```bash
 cd sdk
 npm test
+# Or shortcut from repo root:
+make test-sdk
 ```
 
 #### Full CI Verification (Build, Test, Audit)
@@ -285,6 +305,12 @@ npm run build
 npm test
 npm run lint
 npm audit --audit-level=high
+
+# Or run individual shortcuts from repo root:
+make build-sdk
+make test-sdk
+make lint-sdk
+make audit-sdk
 ```
 
 ### 4. Integration Test Stubs (`tests/`)
@@ -294,11 +320,50 @@ The repository includes integration test stubs in `tests/` covering governance q
 ```bash
 cd frontend
 npx jest ../tests
+# Or shortcut from repo root:
+make test-integration
 ```
 
-### Workspace Root Helpers
+### Workspace Root Helpers (Makefile & npm scripts)
 
-For convenience, the root `package.json` provides scripts to run individual suites from the workspace root:
+For convenience, a root `Makefile` (and `justfile`) provides shortcuts that fan out to the exact per-package commands documented above. You can run all checks across the entire repo or target specific packages from the repository root:
+
+```bash
+# High-level workflows across all packages
+make test        # Run all test suites (contracts, frontend, SDK, integration)
+make lint        # Run all linters (contracts clippy, frontend eslint, SDK eslint)
+make build       # Build all packages (SDK, frontend, contracts WASM)
+make audit       # Run security vulnerability audits across all packages
+make check       # Full verification (lint, test, build, audit, wasm size check)
+make ci          # Alias for make check
+
+# Per-package test shortcuts
+make test-contracts    # cd contracts && cargo test
+make test-frontend     # cd frontend && npm test
+make test-sdk          # cd sdk && npm test
+make test-integration  # cd frontend && npx jest ../tests
+
+# Per-package lint shortcuts
+make lint-contracts    # cd contracts && cargo clippy --all-targets --all-features -- -D warnings
+make lint-frontend     # cd frontend && npm run lint
+make lint-sdk          # cd sdk && npm run lint
+make clippy            # Alias for make lint-contracts
+
+# Per-package build shortcuts
+make build-contracts   # cd contracts && cargo build --target wasm32-unknown-unknown --release
+make build-frontend    # cd frontend && npm run build
+make build-sdk         # cd sdk && npm run build
+
+# Per-package audit & check shortcuts
+make audit-contracts   # cd contracts && cargo audit --config audit.toml
+make audit-frontend    # cd frontend && npm audit --audit-level=high
+make audit-sdk         # cd sdk && npm audit --audit-level=high
+make check-wasm-size   # bash scripts/check-wasm-size.sh
+```
+
+Contributors who prefer [`just`](https://github.com/casey/just) can use the equivalent `just` recipes (`just test`, `just lint`, `just build`, etc.).
+
+The root `package.json` also provides npm scripts to run individual test suites:
 
 ```bash
 npm run test:contracts   # cd contracts && cargo test
