@@ -24,11 +24,11 @@ export function useRpcHealthCheck() {
       try {
         const client = await createQuorumClient();
         const start = Date.now();
-        await client.getLatestLedger();
+        const ledger = await client.getLatestLedger();
         const latency = Date.now() - start;
 
         if (mounted) {
-          recordSuccessfulRead(latency);
+          recordSuccessfulRead(latency, ledger);
         }
       } catch (error) {
         // Failed reads are not recorded; the stale indicator will naturally

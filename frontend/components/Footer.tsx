@@ -2,7 +2,7 @@
 
 import { EXTERNAL_LINKS } from "@/lib/links";
 import { t } from "@/lib/i18n";
-import RpcHealthIndicator from "./RpcHealthIndicator";
+import NetworkHealthWidget from "./NetworkHealthWidget";
 import { useRpcHealthCheck } from "@/lib/useRpcHealthCheck";
 import { USE_FIXTURE } from "@/lib/config";
 
@@ -35,7 +35,7 @@ export default function Footer() {
       </nav>
       <div className="mt-4 flex items-center justify-center gap-4">
         <p>{t("footer.tagline")}</p>
-        <RpcHealthIndicator />
+        <NetworkHealthWidget />
       </div>
     </footer>
   );

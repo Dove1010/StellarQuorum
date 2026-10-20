@@ -11,6 +11,8 @@ describe("RpcHealthProvider", () => {
       lastSuccessfulRead: null,
       lastLatencyMs: null,
       isStale: false,
+      lastLedger: null,
+      ledgerLag: null,
     });
   });
 
@@ -26,6 +28,23 @@ describe("RpcHealthProvider", () => {
     expect(result.current.metrics.lastSuccessfulRead).toBeGreaterThan(0);
     expect(result.current.metrics.lastLatencyMs).toBe(150);
     expect(result.current.metrics.isStale).toBe(false);
+    expect(result.current.metrics.lastLedger).toBeNull();
+    expect(result.current.metrics.ledgerLag).toBeNull();
+  });
+
+  it("records successful read with ledger information", () => {
+    const { result } = renderHook(() => useRpcHealth(), {
+      wrapper: RpcHealthProvider,
+    });
+
+    act(() => {
+      result.current.recordSuccessfulRead(150, 12345);
+    });
+
+    expect(result.current.metrics.lastSuccessfulRead).toBeGreaterThan(0);
+    expect(result.current.metrics.lastLatencyMs).toBe(150);
+    expect(result.current.metrics.lastLedger).toBe(12345);
+    expect(result.current.metrics.ledgerLag).toBe(0); // Should be 0 since it's current
   });
 
   it("marks RPC as stale when last read is older than threshold", () => {
