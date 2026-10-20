@@ -27,9 +27,9 @@ A quick-start guide for first-time contributors. For full details, see [CONTRIBU
 
 - [ ] Create a branch from `main`: `git checkout -b feat/your-feature-name`
 - [ ] Make your changes following the [layer-specific guidelines](CONTRIBUTING.md#contributing-to-contracts)
-- [ ] Run tests: `npm run test:contracts` (or `test:frontend`, `test:sdk`)
-- [ ] Run linting: `npm run lint` (frontend/sdk) or `cargo clippy` (contracts)
-- [ ] Build to verify: `npm run build` (frontend/sdk) or `cargo build --release` (contracts)
+- [ ] Run tests: `make test` (or `npm run test:contracts`, `test:frontend`, `test:sdk`)
+- [ ] Run linting: `make lint` (or `npm run lint`, `cargo clippy`)
+- [ ] Build to verify: `make build` (or `npm run build`, `cargo build --release`)
 
 ## Open a Pull Request
 
