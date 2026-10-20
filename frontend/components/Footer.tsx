@@ -1,9 +1,19 @@
+'use client';
+
 import { EXTERNAL_LINKS } from "@/lib/links";
 import { t } from "@/lib/i18n";
+import RpcHealthIndicator from "./RpcHealthIndicator";
+import { useRpcHealthCheck } from "@/lib/useRpcHealthCheck";
+import { USE_FIXTURE } from "@/lib/config";
 
 // Issue #140: the footer is the only chrome on every page, so it is where a
 // reader looks for the docs, the source and a way to reach the maintainers.
 export default function Footer() {
+  // Only run health checks when not in fixture mode
+  if (!USE_FIXTURE) {
+    useRpcHealthCheck();
+  }
+
   return (
     <footer className="border-t border-[#1a2535] py-8 text-center text-sm text-slate-600">
       <nav aria-label={t("footer.resources")} className="max-w-6xl mx-auto px-6">
@@ -23,7 +33,10 @@ export default function Footer() {
           ))}
         </ul>
       </nav>
-      <p className="mt-4">{t("footer.tagline")}</p>
+      <div className="mt-4 flex items-center justify-center gap-4">
+        <p>{t("footer.tagline")}</p>
+        <RpcHealthIndicator />
+      </div>
     </footer>
   );
 }
