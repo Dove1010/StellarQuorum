@@ -42,6 +42,10 @@ export interface QuorumClientConfig {
   confirmationTimeoutMs?: number;
   /** Read caching is off unless cache.enabled is true. TTLs are milliseconds. */
   cache?: ReadCacheConfig;
+  /** Opt in to JSON-RPC batch simulations for concurrent proposal reads. */
+  batchSimulation?: boolean;
+  /** Transactions per batch, 1..100 (default 50). */
+  simulationBatchSize?: number;
 }
 
 export type ReadMethod =

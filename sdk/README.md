@@ -85,6 +85,35 @@ until a later release marks them as implemented.
 `GovernanceError` and `TokenError` mirror the Rust `#[contracterror]` enums;
 `parseGovernanceError(error)` maps `Error(Contract, #N)` to a code.
 
+## Optional batch simulations
+
+Set `batchSimulation: true` in `QuorumClientConfig` to coalesce concurrent
+proposal reads into JSON-RPC batch HTTP requests. `getProposals()` and
+`getAllProposals()` use this path, with the same ordered `Proposal[]` return
+value. `simulationBatchSize` is 1..100 (default 50). Caching still applies;
+only cache misses are simulated. A singleton uses an individual request.
+
+Batching is opt-in because provider policies differ. The reference Stellar RPC
+[configures a jrpc2 HTTP bridge](https://github.com/stellar/stellar-rpc/blob/main/cmd/stellar-rpc/internal/jsonrpc.go),
+whose [HTTP handler accepts batch requests](https://pkg.go.dev/github.com/creachadair/jrpc2/jhttp).
+The JS Stellar SDK does not expose a batch simulation method, so this SDK
+sends an array of `simulateTransaction` requests using native `fetch`.
+This combines HTTP requests, not operations inside a transaction: each
+simulation still contains exactly one contract invocation.
+
+Providers rejecting batches (HTTP rejection, non-array/invalid responses,
+missing/duplicate response IDs, or unsupported JSON-RPC envelopes) are retried
+with individual reads. That client stops probing thereafter. Batch responses
+are matched by ID, not array order. Contract errors retain individual-read
+semantics; timeouts, authentication errors, and exhausted transient retries
+surface to the caller. Only read simulations are batched.
+
+After `npm run build`, run `node bench/batch-simulate.bench.mjs` from `sdk/`
+to exercise both paths over a local mock HTTP provider. A 50-proposal page
+uses 51 HTTP requests individually and 2 with batching (count + batch),
+with identical decoded values. The benchmark measures HTTP request counts;
+its local elapsed times do not predict public-provider latency.
+
 ## Optional read cache
 
 Caching is disabled by default and is local to each client. Enable it with

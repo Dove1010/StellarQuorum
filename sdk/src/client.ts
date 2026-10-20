@@ -1,6 +1,7 @@
 import { rpc, Contract, TransactionBuilder, BASE_FEE, nativeToScVal, scValToNative, Address, Account, xdr } from '@stellar/stellar-sdk';
 import type { Proposal, GovernanceConfig, QuorumClientConfig, VoteSupport, GetProposalsOptions, ProposalStatus, TransactionConfirmationOptions, ReadMethod, ReadOptions } from './types.js';
 import { ReadCache } from './cache.js';
+import { SimulationBatcher, postSimulationBatch } from './batch.js';
 import { GovernanceError, parseGovernanceError, RpcTimeoutError, TransactionFailedError, contractErrorCode } from './errors.js';
 
 /**
@@ -116,10 +117,19 @@ export class QuorumClient {
   private token: Contract | null;
   private config: QuorumClientConfig;
   private readonly cache: ReadCache;
+  private readonly batcher?: SimulationBatcher;
 
   constructor(config: QuorumClientConfig) {
     this.config = config;
     this.cache = new ReadCache(config.cache);
+    if (config.batchSimulation) {
+      this.batcher = new SimulationBatcher(
+        transactions => this.read('batch simulate', () => postSimulationBatch(
+          config.rpcUrl, transactions, config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        )),
+        config.simulationBatchSize ?? DEFAULT_PAGE_SIZE,
+      );
+    }
     this.server = new rpc.Server(config.rpcUrl, {
       allowHttp: allowsInsecureRpc(config.rpcUrl),
       timeout: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -141,13 +151,13 @@ export class QuorumClient {
   /** A proposal by id, or `null` if the contract reports ProposalNotFound. */
   async getProposal(id: bigint, options?: ReadOptions): Promise<Proposal | null> {
     return this.cache.read('getProposal', [id], options, async () => {
-    try {
-      const raw = await this.simulate<RawProposal>('get_proposal', nativeToScVal(id, { type: 'u64' }));
-      return decodeProposal(raw);
-    } catch (error) {
-      if (parseGovernanceError(error) === GovernanceError.ProposalNotFound) return null;
-      throw error;
-    }
+      try {
+        const raw = await this.simulate<RawProposal>('get_proposal', nativeToScVal(id, { type: 'u64' }));
+        return decodeProposal(raw);
+      } catch (error) {
+        if (parseGovernanceError(error) === GovernanceError.ProposalNotFound) return null;
+        throw error;
+      }
     });
   }
 
@@ -163,36 +173,36 @@ export class QuorumClient {
 
   async getVotingPower(voter: string, snapshotLedger: number, options?: ReadOptions): Promise<bigint> {
     return this.cache.read('getVotingPower', [voter, snapshotLedger], options, async () => {
-    const token = await this.tokenContract(options);
-    return BigInt(await this.simulateOn<bigint | number>(token, 'get_past_balance', new Address(voter).toScVal(), nativeToScVal(snapshotLedger, { type: 'u32' })));
+      const token = await this.tokenContract(options);
+      return BigInt(await this.simulateOn<bigint | number>(token, 'get_past_balance', new Address(voter).toScVal(), nativeToScVal(snapshotLedger, { type: 'u32' })));
     });
   }
 
   async getBalance(voter: string, options?: ReadOptions): Promise<bigint> {
     return this.cache.read('getBalance', [voter], options, async () => {
-    const token = await this.tokenContract(options);
-    return BigInt(await this.simulateOn<bigint | number>(token, 'balance', new Address(voter).toScVal()));
+      const token = await this.tokenContract(options);
+      return BigInt(await this.simulateOn<bigint | number>(token, 'balance', new Address(voter).toScVal()));
     });
   }
 
   async getTokenDecimals(options?: ReadOptions): Promise<number> {
     return this.cache.read('getTokenDecimals', [], options, async () => {
-    const token = await this.tokenContract(options);
-    return this.simulateOn<number>(token, 'decimals');
+      const token = await this.tokenContract(options);
+      return this.simulateOn<number>(token, 'decimals');
     });
   }
 
   async getConfig(options?: ReadOptions): Promise<GovernanceConfig> {
     return this.cache.read('getConfig', [], options, async () => {
-    const raw = await this.simulate<RawConfig>('get_config');
-    return {
-      token: raw.token,
-      quorumBps: raw.quorum_bps,
-      votingPeriod: raw.voting_period,
-      timelockPeriod: raw.timelock_period,
-      proposalThreshold: raw.proposal_threshold,
-      admin: raw.admin,
-    };
+      const raw = await this.simulate<RawConfig>('get_config');
+      return {
+        token: raw.token,
+        quorumBps: raw.quorum_bps,
+        votingPeriod: raw.voting_period,
+        timelockPeriod: raw.timelock_period,
+        proposalThreshold: raw.proposal_threshold,
+        admin: raw.admin,
+      };
     });
   }
 
@@ -212,13 +222,13 @@ export class QuorumClient {
    */
   async getVote(proposalId: bigint, voter: string, options?: ReadOptions): Promise<VoteSupport | null> {
     return this.cache.read('getVote', [proposalId, voter], options, async () => {
-    const support = await this.simulate<number | null | undefined>(
-      'get_vote',
-      nativeToScVal(proposalId, { type: 'u64' }),
-      new Address(voter).toScVal(),
-    );
-    // The contract returns Option<u32>; None decodes to null/undefined.
-    return support === null || support === undefined ? null : (support as VoteSupport);
+      const support = await this.simulate<number | null | undefined>(
+        'get_vote',
+        nativeToScVal(proposalId, { type: 'u64' }),
+        new Address(voter).toScVal(),
+      );
+      // The contract returns Option<u32>; None decodes to null/undefined.
+      return support === null || support === undefined ? null : (support as VoteSupport);
     });
   }
 
@@ -259,29 +269,14 @@ export class QuorumClient {
    * `offset: 0, limit: 50` returns ids 1..50.
    */
   async getAllProposals(options?: GetProposalsOptions): Promise<Proposal[]> {
-    if (!options || (options.limit === undefined && options.offset === undefined)) {
-      const count = await this.getProposalCount(options);
-      const proposals = await Promise.all(
-        Array.from({ length: Number(count) }, (_, i) => this.getProposal(BigInt(i + 1), options))
-      );
-      return proposals.filter(Boolean) as Proposal[];
-    }
-    const offset = options.offset ?? 0;
-    // No explicit limit means "everything from offset onwards".
-    if (options.limit === undefined) {
-      const count = await this.getProposalCount(options);
-      const total = Number(count);
-      const remaining = Math.max(0, total - offset);
-      return this.fetchProposalWindow(offset, remaining, options);
-    }
-    return this.fetchProposalWindow(offset, options.limit, options);
+    return this.fetchProposalWindow(options?.offset ?? 0, options?.limit, options);
   }
 
-  private async fetchProposalWindow(offset: number, limit: number, options?: ReadOptions): Promise<Proposal[]> {
+  private async fetchProposalWindow(offset: number, limit: number | undefined, options?: ReadOptions): Promise<Proposal[]> {
     if (!Number.isInteger(offset) || offset < 0) {
       throw new Error(`Invalid offset ${String(offset)}: must be a non-negative integer`);
     }
-    if (!Number.isInteger(limit) || limit < 0) {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
       throw new Error(`Invalid limit ${String(limit)}: must be a non-negative integer`);
     }
     if (limit === 0) {
@@ -292,7 +287,7 @@ export class QuorumClient {
     if (offset >= total) {
       return [];
     }
-    const end = Math.min(total, offset + limit);
+    const end = limit === undefined ? total : Math.min(total, offset + limit);
     const ids: bigint[] = [];
     // Proposal ids are 1-based; offset 0 → id 1.
     for (let id = offset + 1; id <= end; id += 1) {
@@ -398,16 +393,20 @@ export class QuorumClient {
       .setTimeout(30)
       .build();
 
-    const simulation = await this.read(`simulate:${method}`, () => this.server.simulateTransaction(tx));
-
-    if (rpc.Api.isSimulationError(simulation)) {
-      throw new Error(`Simulation of ${method} failed: ${simulation.error}`);
+    const request = async (): Promise<T> => {
+      const simulation = await this.read(`simulate:${method}`, () => this.server.simulateTransaction(tx));
+      if (rpc.Api.isSimulationError(simulation)) {
+        throw new Error(`Simulation of ${method} failed: ${simulation.error}`);
+      }
+      if (!simulation.result) {
+        throw new Error(`Simulation of ${method} returned no result`);
+      }
+      return scValToNative(simulation.result.retval) as T;
+    };
+    if (this.batcher && contract === this.governance && method === 'get_proposal') {
+      return this.batcher.enqueue(tx.toXDR(), request);
     }
-    if (!simulation.result) {
-      throw new Error(`Simulation of ${method} returned no result`);
-    }
-
-    return scValToNative(simulation.result.retval) as T;
+    return request();
   }
 
   private async read<T>(operation: string, request: () => Promise<T>): Promise<T> {
