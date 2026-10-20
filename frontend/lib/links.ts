@@ -28,4 +28,5 @@ export const EXTERNAL_LINKS: readonly ExternalLink[] = [
   { label: t("footer.discussions"), href: DISCUSSIONS_URL, description: t("footer.discussionsDescription") },
   { label: t("footer.issues"), href: ISSUES_URL, description: t("footer.issuesDescription") },
   { label: t("footer.contributing"), href: CONTRIBUTING_URL, description: t("footer.contributingDescription") },
+  { label: t("footer.rss"), href: "/feed.xml", description: t("footer.rssDescription") },
 ];
