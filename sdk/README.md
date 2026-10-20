@@ -70,15 +70,17 @@ The following `QuorumClient` methods are implemented:
 
 - Governance reads: `getProposal`, `getProposalCount`, `getProposals`,
   `getAllProposals`, `getProposalsByStatus`, `getConfig`, `hasVoted`,
-  `getVote`, `getLatestLedger` and `getVotingPower`
+  `getVote`, `getLatestLedger`, `getVotingPower` and `getDelegate`
 - Token reads: `getBalance`, `getTokenDecimals`, `balance`, `getPastBalance`,
   `allowance` and `totalSupply`
-- Transaction flow: `buildFinalize`, `buildExecute`, `buildCancel`,
+- Transaction flow: `buildCreateProposal`, `buildVote`, `buildDelegate`,
+  `buildUndelegate`, `buildFinalize`, `buildExecute`, `buildCancel`,
   `buildTransfer`, `buildApprove`, `buildTransferFrom` and `submitAndWait`
 
-`buildCreateProposal` and `buildVote` are currently stubs and always throw
-`Error('Not implemented')`. Do not ask users to sign or submit their output
-until a later release marks them as implemented.
+`getVotingPower` reads the token's delegated weight at the proposal snapshot
+through `get_past_votes`. `buildDelegate` and `buildUndelegate` build unsigned
+governance transactions; the holder must authorize even if a different source
+account pays the fee. Self-delegation clears an existing assignment.
 
 ## Contract errors
 
