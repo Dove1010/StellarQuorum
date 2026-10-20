@@ -38,6 +38,11 @@ export const metadata: Metadata = {
   // app/favicon.ico, app/apple-icon.png and app/manifest.ts — see
   // scripts/generate-icons.mjs for the artwork.
   applicationName: "Quorum",
+  alternates: {
+    types: {
+      "application/rss+xml": [{ url: "/feed.xml", title: "Quorum Governance Proposals" }],
+    },
+  },
 };
 
 // Issue #144: the app is dark on every surface, so the browser chrome has to be
