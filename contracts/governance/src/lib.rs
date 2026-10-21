@@ -1,4 +1,6 @@
 #![no_std]
+// Keep the deployed initialize ABI and its generated Soroban client/args flat.
+#![allow(clippy::too_many_arguments)]
 #[cfg(test)]
 extern crate std;
 
@@ -12,7 +14,9 @@ use soroban_sdk::{contract, contractclient, contractimpl, contracttype, contract
 pub trait TokenInterface {
     fn total_supply(env: Env) -> i128;
     fn balance(env: Env, owner: Address) -> i128;
-    fn get_past_balance(env: Env, owner: Address, ledger: u32) -> i128;
+    fn get_past_votes(env: Env, owner: Address, ledger: u32) -> i128;
+    fn delegate(env: Env, delegator: Address, delegatee: Address);
+    fn get_delegates(env: Env, account: Address) -> Address;
 }
 
 #[contracterror]
@@ -130,7 +134,7 @@ pub struct ContractUnpaused {
 }
 
 /// Emitted for each accepted vote. `voting_power` is the weight actually
-/// counted — the voter's balance at the snapshot ledger, not their live one.
+/// counted — effective delegated power at the snapshot ledger.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VoteCast {
@@ -138,6 +142,13 @@ pub struct VoteCast {
     pub voter: Address,
     pub support: u32,
     pub voting_power: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Delegated {
+    pub delegator: Address,
+    pub delegatee: Address,
 }
 
 /// Emitted when voting closes and the outcome is decided.
@@ -294,13 +305,19 @@ impl GovernanceContract {
         }
         
         // Validate title: reject empty titles
-        if title.len() == 0 {
+        if title.is_empty() {
             return Err(GovernanceError::EmptyTitle);
         }
         
         // Validate title length
         if title.len() > MAX_TITLE_LENGTH {
             return Err(GovernanceError::TitleTooLong);
+        }
+        let mut title_bytes = [0u8; MAX_TITLE_LENGTH as usize];
+        let title_len = title.len() as usize;
+        title.copy_into_slice(&mut title_bytes[..title_len]);
+        if title_bytes[..title_len].iter().all(|byte| byte.is_ascii_whitespace()) {
+            return Err(GovernanceError::EmptyTitle);
         }
         
         // Validate description length
@@ -383,11 +400,15 @@ impl GovernanceContract {
             .get(&DataKey::Proposal(proposal_id)).ok_or(GovernanceError::ProposalNotFound)?;
         if env.ledger().sequence() > proposal.end_ledger { return Err(GovernanceError::VotingPeriodEnded); }
         if proposal.status != ProposalStatus::Active { return Err(GovernanceError::VotingNotActive); }
+        // The snapshot ledger must close before anyone votes. Otherwise a
+        // holder could vote, re-delegate within that same ledger, and let the
+        // recipient vote the same weight again as its checkpoint changes.
+        if env.ledger().sequence() < proposal.start_ledger { return Err(GovernanceError::VotingNotActive); }
 
         // Power is read at the proposal's snapshot ledger, not live, so tokens
         // bought or borrowed after the proposal opened carry no weight.
         let voting_power = TokenClient::new(&env, &config.token)
-            .get_past_balance(&voter, &proposal.snapshot_ledger);
+            .get_past_votes(&voter, &proposal.snapshot_ledger);
         if voting_power <= 0 { return Err(GovernanceError::NoVotingPower); }
 
         let tally = match support {
@@ -407,6 +428,60 @@ impl GovernanceContract {
             VoteCast { proposal_id, voter, support, voting_power },
         );
         Ok(())
+    }
+
+    /// Delegation is owned by the token so transfers and delegation share the
+    /// same checkpoint history. This facade preserves the governance API.
+    pub fn delegate(env: Env, delegator: Address, delegatee: Address) -> Result<(), GovernanceError> {
+        let config = Self::require_config(&env)?;
+        delegator.require_auth();
+        let token = TokenClient::new(&env, &config.token);
+        let previous = token.get_delegates(&delegator);
+        match token.try_delegate(&delegator, &delegatee) {
+            Ok(Ok(())) => (),
+            Err(Ok(error)) => {
+                // TokenError::Overflow is 6; keep the governor's public code.
+                if error == soroban_sdk::Error::from_contract_error(6) {
+                    return Err(GovernanceError::Overflow);
+                }
+                env.panic_with_error(error);
+            }
+            _ => panic!("token delegation invocation failed"),
+        }
+        let delegatee = token.get_delegates(&delegator);
+        // Record facade calls for compatibility, but never resolve votes or
+        // views from this mapping: users may also delegate directly on token.
+        let key = DataKey::Delegate(delegator.clone());
+        if delegatee == delegator {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &delegatee);
+            env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
+        Self::touch_instance(&env);
+        if previous != delegatee {
+            env.events().publish(
+                (Symbol::new(&env, "delegated"), delegator.clone(), delegatee.clone()),
+                Delegated { delegator, delegatee },
+            );
+        }
+        Ok(())
+    }
+
+    pub fn undelegate(env: Env, delegator: Address) -> Result<(), GovernanceError> {
+        Self::delegate(env, delegator.clone(), delegator)
+    }
+
+    pub fn get_delegate(env: Env, account: Address) -> Result<Address, GovernanceError> {
+        let config = Self::require_config(&env)?;
+        Self::touch_instance(&env);
+        Ok(TokenClient::new(&env, &config.token).get_delegates(&account))
+    }
+
+    pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> Result<i128, GovernanceError> {
+        let config = Self::require_config(&env)?;
+        Self::touch_instance(&env);
+        Ok(TokenClient::new(&env, &config.token).get_past_votes(&account, &ledger))
     }
 
     pub fn finalize(env: Env, proposal_id: u64) -> Result<ProposalStatus, GovernanceError> {
@@ -684,14 +759,14 @@ impl GovernanceContract {
     }
 
     /// Returns the voting power an address would vote with on a given proposal.
-    /// Returns the voter's balance at the proposal's snapshot ledger.
+    /// Returns effective delegated weight at the proposal's snapshot ledger.
     pub fn get_voting_power(env: Env, proposal_id: u64, voter: Address) -> Result<i128, GovernanceError> {
         let proposal: Proposal = env.storage().persistent()
             .get(&DataKey::Proposal(proposal_id)).ok_or(GovernanceError::ProposalNotFound)?;
         
         let config: Config = env.storage().instance().get(&DataKey::Config).unwrap();
         let voting_power = TokenClient::new(&env, &config.token)
-            .get_past_balance(&voter, &proposal.snapshot_ledger);
+            .get_past_votes(&voter, &proposal.snapshot_ledger);
         
         Ok(voting_power)
     }
@@ -782,6 +857,3 @@ impl GovernanceContract {
 
 #[cfg(test)]
 mod test;
-
-// TODO: add delegate() for voting power delegation
-// TODO: add get_past_votes(address, ledger) for snapshot-based power

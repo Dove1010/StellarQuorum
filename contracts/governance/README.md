@@ -51,9 +51,9 @@ Anyone can extend a proposal's storage TTL without modifying it:
 
 UIs can preview voting power before signing:
 
-- `get_voting_power(proposal_id, voter)` returns the voter's balance at snapshot
+- `get_voting_power(proposal_id, voter)` returns effective delegated weight at snapshot
 - Single round-trip instead of fetching proposal + calling token contract
-- Returns `0` for addresses with no snapshot balance
+- Returns `0` for addresses with no voting power at that snapshot
 - Returns `ProposalNotFound` for unknown proposals
 
 ## Quorum derivation
@@ -113,9 +113,29 @@ Two different reads, deliberately:
 | `proposal_threshold` in `create_proposal` | **live**, at creation              | Gates who may open a proposal _now_, so spamming the queue costs real stake.           |
 | Voting power in `vote`                    | **snapshot**, at `snapshot_ledger` | Fixed when the proposal opened, so tokens bought or borrowed mid-vote carry no weight. |
 
-The snapshot read is backed by per-address balance checkpoints in the token
-contract (`get_past_balance`). A voter with no power at the snapshot is
+The snapshot read is backed by per-address voting-power checkpoints in the token
+contract (`get_past_votes`), including delegated weight. A voter with no power at the snapshot is
 rejected with `NoVotingPower` rather than recording a zero-weight vote.
+
+Voting begins at `start_ledger`, one ledger after the snapshot. Rejecting votes
+before then prevents voting and re-delegating the same weight while the snapshot
+ledger is still open. Delegations changed after that ledger affect subsequent
+proposals, while existing proposals retain the recorded weight.
+
+### Delegation
+
+`delegate(delegator, delegatee)` requires the holder's authorization and forwards
+the assignment to the configured token. `undelegate(delegator)` and self-delegation
+restore the holder's own voting power. A holder can select one representative;
+their tokens stay in their account. A representative's incoming weight is not
+forwarded when they delegate their own balance.
+
+`get_delegate(account)` reads the token's current representative, and
+`get_past_votes(account, ledger)` reads its historical effective weight. The token
+is authoritative even when a holder calls it directly; governance's compatibility
+mapping records facade calls and is never used to calculate snapshot power.
+Each change through governance emits a `Delegated` payload on the `delegated`
+topic with the holder and actual representative.
 
 ## Proposal Title and Description Limits
 
@@ -148,10 +168,11 @@ signals, not production-Wasm fee estimates):
 
 | Invocation          | CPU instructions | Memory bytes |
 | ------------------- | ---------------: | -----------: |
-| `create_proposal()` |          213,907 |       34,894 |
-| `vote()`            |          205,390 |       33,177 |
+| `create_proposal()` |          267,369 |       47,829 |
+| `vote()`            |          226,196 |       38,213 |
 
-CI assertions allow up to 25% above each baseline (267,384 / 43,618 for
-`create_proposal()` and 256,738 / 41,472 for `vote()`). Re-measure and update
+These measurements include delegated checkpoint reads and title validation.
+CI assertions allow up to 25% above each baseline (334,212 / 59,787 for
+`create_proposal()` and 282,745 / 47,767 for `vote()`). Re-measure and update
 both this table and the thresholds when an intentional change materially
 alters the contract's resource use.

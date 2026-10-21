@@ -27,7 +27,7 @@ QuorumClient (sdk/)
 GovernanceContract ──── cross-contract calls ────► QuorumToken
   (proposals, votes,     total_supply()             (balances, checkpoints,
    quorum, timelock)     balance()                   allowances, supply)
-        │                get_past_balance()
+        │                get_past_votes()
         ▼
    Contract events ──► Stellar ledger ──► indexers / clients
 ```
@@ -53,7 +53,7 @@ Governance depends on three token functions (the `TokenInterface` trait in
 |---|---|---|
 | `create_proposal` | `balance(proposer)` | Live balance must be at least `Config.proposal_threshold`, otherwise `BelowProposalThreshold`. Deliberately live, since the threshold is about who may open a proposal now. |
 | `create_proposal` | `total_supply()` | Derives `quorum_required = total_supply * quorum_bps / 10000` (checked multiply, integer division), frozen into the proposal at creation. Mints or burns during voting do not move the bar. |
-| `vote` | `get_past_balance(voter, proposal.snapshot_ledger)` | The voter's weight. A result of 0 or less is rejected with `NoVotingPower`. |
+| `vote` | `get_past_votes(voter, proposal.snapshot_ledger)` | The voter's weight. A result of 0 or less is rejected with `NoVotingPower`. |
 
 `finalize`, `execute`, `cancel` and the view functions make no token calls.
 
@@ -103,7 +103,7 @@ sequenceDiagram
     Note over V: Voting period (start_ledger to end_ledger)
 
     V->>G: vote(proposal_id, support)
-    G->>T: get_past_balance(voter, snapshot_ledger)
+    G->>T: get_past_votes(voter, snapshot_ledger)
     T-->>G: returns voting_power
     G->>G: record vote weight
     G-->>V: vote recorded
@@ -160,7 +160,7 @@ sequenceDiagram
     Note over V: Voting period (start_ledger to end_ledger)
 
     V->>G: vote(proposal_id, support)
-    G->>T: get_past_balance(voter, snapshot_ledger)
+    G->>T: get_past_votes(voter, snapshot_ledger)
     T-->>G: returns voting_power
     G->>G: record vote weight
     G-->>V: vote recorded
@@ -211,9 +211,18 @@ The token implements this with per-address checkpoints:
   reads as `0`; raise the constant if governance is ever configured with a longer
   `voting_period`. See [contracts/token/README.md](../contracts/token/README.md#checkpoint-growth).
 
-Delegation (`delegate()`) and `get_past_votes()` are not implemented; both
-contracts carry `TODO`s for them, and `DataKey::Delegate` in the governance
-contract is reserved but unused.
+Delegation is recorded in the token under `Delegate` and `VoteCheckpoints`.
+Every balance change updates the effective representative's weight, and
+delegation changes move only the holder's own weight between representatives.
+`get_past_votes(account, ledger)` reads these checkpoints with the same ledger
+boundary, pruning, and TTL rules as balance history. Existing balance history is
+preserved as self-voting history when first materializing vote checkpoints.
+
+Governance exposes `delegate`, `undelegate`, and `get_delegate`, forwarding to the
+configured token. Its local mapping records facade calls; views and voting use
+the token so direct token calls cannot create stale voting-power calculations.
+`vote()` reads `get_past_votes` at the proposal snapshot and rejects calls before
+`start_ledger`, ensuring the snapshot ledger has closed before votes are counted.
 
 ## Allowances and expiry (token)
 

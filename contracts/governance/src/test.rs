@@ -4,6 +4,9 @@ use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke};
 use soroban_sdk::{IntoVal, TryFromVal, Val};
 
+#[path = "test_delegation.rs"]
+mod delegation;
+
 // Models an action target attempting to execute the same proposal from its
 // callback after the governor has committed the Executed state.
 #[contract]
@@ -118,12 +121,8 @@ fn quorum_required_tracks_supply_changes_between_proposals() {
 }
 
 #[test]
-fn quorum_bps_of_zero_yields_no_threshold() {
-    let env = Env::default();
-    let (_, _, governance_id) = deploy(&env, 1_000_000, 0);
-    let proposer = Address::generate(&env);
-
-    assert_eq!(propose(&env, &governance_id, &proposer).quorum_required, 0);
+fn quorum_calculation_with_zero_basis_points_is_zero() {
+    assert_eq!(GovernanceContract::quorum_for_supply(1_000_000, 0), Ok(0));
 }
 
 const THRESHOLD: i128 = 10_000;
@@ -274,6 +273,7 @@ fn address_that_never_held_tokens_cannot_vote() {
         &String::from_str(&env, ""),
     );
 
+    start_voting(&env, &governance, proposal_id);
     assert_eq!(
         governance.try_vote(&Address::generate(&env), &proposal_id, &VOTE_FOR),
         Err(Ok(GovernanceError::NoVotingPower))
@@ -333,7 +333,7 @@ fn initialize_cannot_run_twice() {
 #[test]
 fn admin_can_transfer_governance_administration_and_emits_event() {
     let env = Env::default();
-    let (admin, _, governance_id) = deploy(&env, 1_000_000, QUORUM_BPS);
+    let (_admin, _, governance_id) = deploy(&env, 1_000_000, QUORUM_BPS);
     let governance = GovernanceContractClient::new(&env, &governance_id);
     let new_admin = Address::generate(&env);
 
@@ -434,7 +434,15 @@ fn open_with_holders(
 
     env.ledger().set_sequence_number(OPENED);
     let id = propose(env, &governance_id, &admin).id;
+    env.ledger().set_sequence_number(OPENED + 1);
     (admin, governance_id, id)
+}
+
+fn start_voting(env: &Env, governance: &GovernanceContractClient, id: u64) {
+    let start = governance.get_proposal(&id).start_ledger;
+    if env.ledger().sequence() < start {
+        env.ledger().set_sequence_number(start);
+    }
 }
 
 #[test]
@@ -542,6 +550,7 @@ fn get_vote_returns_the_recorded_choice() {
         &String::from_str(&env, ""),
     );
 
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&admin, &proposal_id, &VOTE_FOR);
     governance.vote(&against, &proposal_id, &VOTE_AGAINST);
     governance.vote(&abstain, &proposal_id, &VOTE_ABSTAIN);
@@ -742,6 +751,7 @@ fn finalize_counts_abstentions_toward_quorum() {
 
 /// Votes the proposal through and finalizes it into Queued.
 fn queue_proposal(env: &Env, governance: &GovernanceContractClient, admin: &Address, id: u64) {
+    start_voting(env, governance, id);
     governance.vote(admin, &id, &VOTE_FOR);
     close_voting(env, governance, id);
     assert_eq!(governance.finalize(&id), ProposalStatus::Queued);
@@ -996,6 +1006,7 @@ fn a_recorded_vote_outlives_a_long_voting_window() {
     let (admin, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
     let governance = GovernanceContractClient::new(&env, &governance_id);
 
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&admin, &proposal_id, &VOTE_FOR);
 
     env.ledger()
@@ -1237,9 +1248,8 @@ fn add_weight_saturates_into_an_error_at_the_i128_boundary() {
 fn tallying_the_entire_supply_at_the_boundary_does_not_trap() {
     let env = Env::default();
     env.ledger().set_sequence_number(10);
-    // quorum_bps must be 0 here: any non-zero bps against a maxed supply
-    // overflows the quorum calculation before a vote is ever cast.
-    let (admin, _, governance_id) = deploy(&env, i128::MAX, 0);
+    // One basis point is valid and multiplication by one cannot overflow.
+    let (admin, _, governance_id) = deploy(&env, i128::MAX, 1);
     let governance = GovernanceContractClient::new(&env, &governance_id);
 
     env.ledger().set_sequence_number(20);
@@ -1249,6 +1259,7 @@ fn tallying_the_entire_supply_at_the_boundary_does_not_trap() {
         &String::from_str(&env, "Single holder controlling i128::MAX."),
         &String::from_str(&env, ""),
     );
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&admin, &proposal_id, &VOTE_FOR);
 
     assert_eq!(governance.get_proposal(&proposal_id).for_votes, i128::MAX);
@@ -1321,16 +1332,19 @@ fn create_proposal_and_vote_stay_within_resource_budgets() {
     let create_cpu = env.cost_estimate().budget().cpu_instruction_cost();
     let create_memory = env.cost_estimate().budget().memory_bytes_cost();
 
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&admin, &proposal_id, &VOTE_FOR);
     let vote_cpu = env.cost_estimate().budget().cpu_instruction_cost();
     let vote_memory = env.cost_estimate().budget().memory_bytes_cost();
 
     std::println!("create_proposal budget: cpu={create_cpu}, memory={create_memory}");
     std::println!("vote budget: cpu={vote_cpu}, memory={vote_memory}");
-    assert!(create_cpu <= 267_384, "create_proposal CPU regression: {create_cpu}");
-    assert!(vote_cpu <= 256_738, "vote CPU regression: {vote_cpu}");
-    assert!(create_memory <= 43_618, "create_proposal memory regression: {create_memory}");
-    assert!(vote_memory <= 41_472, "vote memory regression: {vote_memory}");
+    // Measured with delegated vote reads and title validation; keep the
+    // existing 25% regression margin over the documented measurements.
+    assert!(create_cpu <= 334_212, "create_proposal CPU regression: {create_cpu}");
+    assert!(vote_cpu <= 282_745, "vote CPU regression: {vote_cpu}");
+    assert!(create_memory <= 59_787, "create_proposal memory regression: {create_memory}");
+    assert!(vote_memory <= 47_767, "vote memory regression: {vote_memory}");
 }
 
 // ─── Full cross-contract lifecycle (#162) ──────────────────────────────────────
@@ -1528,7 +1542,7 @@ fn full_lifecycle_fails_when_quorum_is_not_reached() {
 // `require_auth()` deeper in the call tree (or a missing one) would show up
 // as a failure here instead of silently passing under `mock_all_auths()`.
 //
-// `token.balance()`, `token.total_supply()` and `token.get_past_balance()` —
+// `token.balance()`, `token.total_supply()` and `token.get_past_votes()` —
 // the three cross-invocations governance makes — call no `require_auth()`
 // today (that's the premise of #163: it'll change once delegation lands), so
 // mocking only the top-level proposer/voter call, with no `sub_invokes`, and
@@ -1649,7 +1663,7 @@ fn voting_only_requires_the_voters_auth() {
             contract: &governance_id,
             fn_name: "vote",
             args: (admin.clone(), id, VOTE_FOR).into_val(&env),
-            // No sub_invokes: vote() cross-invokes token.get_past_balance(),
+            // No sub_invokes: vote() cross-invokes token.get_past_votes(),
             // also not gated by auth today — same proof as above.
             sub_invokes: &[],
         },
@@ -2425,18 +2439,14 @@ fn initialize_emits_event_with_config() {
     // Verify the event was emitted
     let events = env.events().all();
     let init_event = events.iter().find(|e| {
-        if let Ok(topics) = <(Symbol,)>::try_from_val(&env, &e.topics) {
-            topics.0 == Symbol::new(&env, "contract_initialized")
-        } else {
-            false
-        }
+        e.1 == (Symbol::new(&env, "contract_initialized"),).into_val(&env)
     });
     
     assert!(init_event.is_some(), "ContractInitialized event should be emitted");
     
     // Verify event payload
     if let Some(event) = init_event {
-        let payload: ContractInitialized = event.data.try_into_val(&env).unwrap();
+        let payload: ContractInitialized = ContractInitialized::try_from_val(&env, &event.2).unwrap();
         assert_eq!(payload.admin, admin);
         assert_eq!(payload.guardian, guardian);
         assert_eq!(payload.token, token_id);
@@ -2458,7 +2468,7 @@ fn get_proposals_returns_empty_for_no_proposals() {
     let (_, _, governance_id) = deploy(&env, 1_000_000, QUORUM_BPS);
     let governance = GovernanceContractClient::new(&env, &governance_id);
     
-    let proposals = governance.get_proposals(&1, &10).unwrap();
+    let proposals = governance.get_proposals(&1, &10);
     assert_eq!(proposals.len(), 0);
 }
 
@@ -2473,14 +2483,14 @@ fn get_proposals_returns_bounded_page() {
     for i in 1..=5 {
         governance.create_proposal(
             &proposer,
-            &String::from_str(&env, &format!("Proposal {}", i)),
+            &String::from_str(&env, &std::format!("Proposal {}", i)),
             &String::from_str(&env, "Description"),
             &String::from_str(&env, ""),
         );
     }
     
     // Request 3 proposals starting from ID 1
-    let proposals = governance.get_proposals(&1, &3).unwrap();
+    let proposals = governance.get_proposals(&1, &3);
     assert_eq!(proposals.len(), 3);
     assert_eq!(proposals.get(0).unwrap().id, 1);
     assert_eq!(proposals.get(1).unwrap().id, 2);
@@ -2509,11 +2519,11 @@ fn get_proposals_handles_out_of_range_start() {
     );
     
     // Start beyond last proposal
-    let proposals = governance.get_proposals(&10, &5).unwrap();
+    let proposals = governance.get_proposals(&10, &5);
     assert_eq!(proposals.len(), 0);
     
     // Start at 0
-    let proposals = governance.get_proposals(&0, &5).unwrap();
+    let proposals = governance.get_proposals(&0, &5);
     assert_eq!(proposals.len(), 0);
 }
 
@@ -2528,14 +2538,14 @@ fn get_proposals_enforces_max_page_size() {
     for i in 1..=10 {
         governance.create_proposal(
             &proposer,
-            &String::from_str(&env, &format!("Proposal {}", i)),
+            &String::from_str(&env, &std::format!("Proposal {}", i)),
             &String::from_str(&env, "Description"),
             &String::from_str(&env, ""),
         );
     }
     
     // Request more than MAX_PAGE_SIZE (which is 100), should be capped
-    let proposals = governance.get_proposals(&1, &200).unwrap();
+    let proposals = governance.get_proposals(&1, &200);
     assert!(proposals.len() <= 100);
 }
 
@@ -2550,24 +2560,24 @@ fn get_proposals_paging_boundaries() {
     for i in 1..=7 {
         governance.create_proposal(
             &proposer,
-            &String::from_str(&env, &format!("Proposal {}", i)),
+            &String::from_str(&env, &std::format!("Proposal {}", i)),
             &String::from_str(&env, "Description"),
             &String::from_str(&env, ""),
         );
     }
     
     // Page 1: proposals 1-3
-    let page1 = governance.get_proposals(&1, &3).unwrap();
+    let page1 = governance.get_proposals(&1, &3);
     assert_eq!(page1.len(), 3);
     assert_eq!(page1.get(0).unwrap().id, 1);
     
     // Page 2: proposals 4-6
-    let page2 = governance.get_proposals(&4, &3).unwrap();
+    let page2 = governance.get_proposals(&4, &3);
     assert_eq!(page2.len(), 3);
     assert_eq!(page2.get(0).unwrap().id, 4);
     
     // Page 3: proposal 7 (partial page)
-    let page3 = governance.get_proposals(&7, &3).unwrap();
+    let page3 = governance.get_proposals(&7, &3);
     assert_eq!(page3.len(), 1);
     assert_eq!(page3.get(0).unwrap().id, 7);
 }
@@ -2643,7 +2653,7 @@ fn get_proposals_by_proposer_multiple_proposals() {
     for i in 1..=5 {
         governance.create_proposal(
             &proposer,
-            &String::from_str(&env, &format!("Proposal {}", i)),
+            &String::from_str(&env, &std::format!("Proposal {}", i)),
             &String::from_str(&env, "Description"),
             &String::from_str(&env, ""),
         );
@@ -2676,8 +2686,8 @@ fn has_reached_quorum_returns_false_for_no_votes() {
         &String::from_str(&env, ""),
     );
     
-    let reached_quorum = governance.has_reached_quorum(&proposal_id).unwrap();
-    assert_eq!(reached_quorum, false);
+    let reached_quorum = governance.has_reached_quorum(&proposal_id);
+    assert!(!reached_quorum);
 }
 
 #[test]
@@ -2699,13 +2709,14 @@ fn has_reached_quorum_returns_true_when_quorum_met() {
     );
     
     // Before voting, quorum not reached
-    assert_eq!(governance.has_reached_quorum(&proposal_id).unwrap(), false);
+    assert!(!governance.has_reached_quorum(&proposal_id));
     
     // Vote with 60,000 tokens (support=1 means for)
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&voter, &proposal_id, &1);
     
     // After voting, quorum reached
-    assert_eq!(governance.has_reached_quorum(&proposal_id).unwrap(), true);
+    assert!(governance.has_reached_quorum(&proposal_id));
 }
 
 #[test]
@@ -2733,12 +2744,13 @@ fn has_reached_quorum_counts_all_vote_types() {
     );
     
     // Vote: 20k for, 20k against, 15k abstain = 55k total (> 50k quorum)
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&voter1, &proposal_id, &1); // for
     governance.vote(&voter2, &proposal_id, &0); // against
     governance.vote(&voter3, &proposal_id, &2); // abstain
     
     // Quorum should be reached (55k > 50k)
-    assert_eq!(governance.has_reached_quorum(&proposal_id).unwrap(), true);
+    assert!(governance.has_reached_quorum(&proposal_id));
 }
 
 #[test]
@@ -2758,17 +2770,18 @@ fn has_reached_quorum_agrees_with_finalize() {
         &String::from_str(&env, ""),
     );
     
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&voter, &proposal_id, &1); // for
     
     // Verify quorum reached before finalize
-    assert_eq!(governance.has_reached_quorum(&proposal_id).unwrap(), true);
+    assert!(governance.has_reached_quorum(&proposal_id));
     
     // Advance past voting period
     let proposal = governance.get_proposal(&proposal_id);
-    env.ledger().set_sequence(proposal.end_ledger + 1);
+    env.ledger().set_sequence_number(proposal.end_ledger + 1);
     
     // Finalize and check status
-    let status = governance.finalize(&proposal_id).unwrap();
+    let status = governance.finalize(&proposal_id);
     assert_eq!(status, ProposalStatus::Queued); // Passed
 }
 
@@ -2789,17 +2802,18 @@ fn has_reached_quorum_agrees_with_finalize_failed() {
         &String::from_str(&env, ""),
     );
     
+    start_voting(&env, &governance, proposal_id);
     governance.vote(&voter, &proposal_id, &1); // for
     
     // Verify quorum NOT reached before finalize
-    assert_eq!(governance.has_reached_quorum(&proposal_id).unwrap(), false);
+    assert!(!governance.has_reached_quorum(&proposal_id));
     
     // Advance past voting period
     let proposal = governance.get_proposal(&proposal_id);
-    env.ledger().set_sequence(proposal.end_ledger + 1);
+    env.ledger().set_sequence_number(proposal.end_ledger + 1);
     
     // Finalize and check status
-    let status = governance.finalize(&proposal_id).unwrap();
+    let status = governance.finalize(&proposal_id);
     assert_eq!(status, ProposalStatus::Failed); // Failed due to no quorum
 }
 
