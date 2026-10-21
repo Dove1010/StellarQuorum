@@ -6,6 +6,7 @@ Soroban smart contract implementing on-chain governance for the Quorum protocol.
 
 - `initialize` — set config, quorum params, token address, guardian, and execution grace period
 - `create_proposal` — create a new proposal (requires live token balance >= `proposal_threshold`)
+- `create_proposal_with_kind` — as `create_proposal`, choosing `Signaling` (never executed) or `Executable`
 - `vote` — cast For/Against/Abstain vote on active proposal
 - `finalize` — evaluate quorum after voting period ends
 - `execute` — execute queued proposal after timelock (must be within grace period if configured)
@@ -14,6 +15,9 @@ Soroban smart contract implementing on-chain governance for the Quorum protocol.
 - `unpause` — restore normal operation (admin only)
 - `extend_proposal_ttl` — anyone can pay to extend a proposal's storage lifetime
 - `get_voting_power` — view an address's voting power for a given proposal
+- `get_proposal_phase` — view a proposal's lifecycle phase at the current ledger (`Pending`, `Active`, `Ended`, `Queued`, `ReadyToExecute`, `Passed`, `Executed`, `Failed`, `Cancelled`, `Expired`)
+- `get_quorum_progress` — view how much of the quorum requirement has voted, in basis points (capped at 10000)
+- `get_governance_stats` — view O(1) counters of proposals by status and votes cast
 
 ## Emergency Pause
 

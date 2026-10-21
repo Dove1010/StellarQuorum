@@ -42,6 +42,7 @@ pub enum GovernanceError {
     DescriptionTooLong      = 21,
     MinimumQuorumRequired   = 22,
     MinimumTimelockRequired = 23,
+    NotExecutable           = 24,
 }
 
 /// Basis-point denominator: `quorum_bps` of 500 means 5% of total supply.
@@ -52,6 +53,10 @@ const BPS_DENOMINATOR: i128 = 10_000;
 /// above it demands more votes than exist, so no proposal could ever reach
 /// quorum and there is no way to recover the parameter.
 const MAX_QUORUM_BPS: u32 = 10_000;
+
+/// Ceiling for `get_quorum_progress`, in basis points. Reaching quorum is
+/// 10000, and anything beyond it is reported as 10000 too.
+const MAX_QUORUM_PROGRESS_BPS: u32 = 10_000;
 
 /// Minimum quorum in basis points to prevent governance capture.
 /// A quorum of 0 means a single vote carries a proposal, which is dangerous
@@ -187,6 +192,39 @@ pub enum ProposalStatus {
     Pending, Active, Passed, Failed, Queued, Executed, Cancelled, Expired,
 }
 
+/// Whether a proposal only expresses an opinion or also dispatches actions.
+/// A `Signaling` proposal goes through the same vote and finalize lifecycle,
+/// but `execute()` rejects it.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProposalKind {
+    Signaling, Executable,
+}
+
+/// The lifecycle stage of a proposal, derived from its stored status and the
+/// current ledger. Unlike `ProposalStatus`, `Active` is split into `Pending`
+/// (before voting opens) and `Ended` (voting closed, not yet finalized), and
+/// `Queued` is split into `Queued` (timelock running) and `ReadyToExecute`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProposalPhase {
+    Pending, Active, Ended, Queued, ReadyToExecute, Passed, Executed, Failed, Cancelled, Expired,
+}
+
+/// Running totals over all proposals, maintained as statuses change.
+#[contracttype]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GovernanceStats {
+    pub total_proposals: u64,
+    pub active: u64,
+    pub queued: u64,
+    pub executed: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub expired: u64,
+    pub votes_cast: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Proposal {
@@ -204,6 +242,7 @@ pub struct Proposal {
     pub quorum_required: i128,
     pub status: ProposalStatus,
     pub metadata_uri: String,
+    pub kind: ProposalKind,
 }
 
 #[contracttype]
@@ -230,6 +269,7 @@ pub enum DataKey {
     PendingAdmin,
     ProposerIndex(Address, u64), // (proposer, index) -> proposal_id
     ProposerCount(Address),      // proposer -> count of proposals
+    Stats,
 }
 
 #[contract]
@@ -285,6 +325,12 @@ impl GovernanceContract {
     }
 
     pub fn create_proposal(env: Env, proposer: Address, title: String, description: String, metadata_uri: String) -> Result<u64, GovernanceError> {
+        Self::create_proposal_with_kind(env, proposer, title, description, metadata_uri, ProposalKind::Executable)
+    }
+
+    /// As `create_proposal`, but also records whether the proposal is only a
+    /// `Signaling` expression of opinion or an `Executable` one.
+    pub fn create_proposal_with_kind(env: Env, proposer: Address, title: String, description: String, metadata_uri: String, kind: ProposalKind) -> Result<u64, GovernanceError> {
         let config: Config = Self::require_config(&env)?;
         proposer.require_auth();
         
@@ -342,10 +388,15 @@ impl GovernanceContract {
             quorum_required,
             status: ProposalStatus::Active,
             metadata_uri: metadata_uri.clone(),
+            kind,
         };
         env.storage().persistent().set(&DataKey::Proposal(id), &proposal);
         env.storage().instance().set(&DataKey::ProposalCount, &id);
-        
+        Self::update_stats(&env, |stats| {
+            stats.total_proposals = stats.total_proposals.saturating_add(1);
+            stats.active = stats.active.saturating_add(1);
+        });
+
         // Index proposal by proposer
         let proposer_count: u64 = env.storage().persistent()
             .get(&DataKey::ProposerCount(proposer.clone()))
@@ -401,6 +452,9 @@ impl GovernanceContract {
         Self::touch_proposal(&env, proposal_id);
         Self::touch_vote(&env, proposal_id, &voter);
         Self::touch_instance(&env);
+        Self::update_stats(&env, |stats| {
+            stats.votes_cast = stats.votes_cast.saturating_add(1);
+        });
 
         env.events().publish(
             (Symbol::new(&env, "vote_cast"), proposal_id, voter.clone()),
@@ -417,13 +471,10 @@ impl GovernanceContract {
         // Checked, for the same reason as add_weight: honest tallies cannot
         // exceed the supply, but nothing enforces that, and a trap here would
         // be unrecoverable rather than an error a caller can handle.
-        let total = proposal
-            .for_votes
-            .checked_add(proposal.against_votes)
-            .and_then(|sum| sum.checked_add(proposal.abstain_votes))
-            .ok_or(GovernanceError::Overflow)?;
+        let total = Self::total_votes(&proposal)?;
         let quorum_ok = total >= proposal.quorum_required;
         let majority_for = proposal.for_votes > proposal.against_votes;
+        let previous = proposal.status.clone();
         proposal.status = if quorum_ok && majority_for {
             // initialize() accepts any u32 timelock_period; queueing must not
             // wrap the ledger sequence into a trap when it does.
@@ -437,6 +488,7 @@ impl GovernanceContract {
         let status = proposal.status.clone();
         env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
         Self::touch_proposal(&env, proposal_id);
+        Self::record_status_change(&env, &previous, &status);
 
         env.events().publish(
             (Symbol::new(&env, "proposal_finalized"), proposal_id),
@@ -471,6 +523,8 @@ impl GovernanceContract {
         let mut proposal: Proposal = env.storage().persistent()
             .get(&DataKey::Proposal(proposal_id)).ok_or(GovernanceError::ProposalNotFound)?;
         if proposal.status != ProposalStatus::Queued { return Err(GovernanceError::ProposalNotPassed); }
+        // A signaling proposal carries no actions, so there is nothing to run.
+        if proposal.kind == ProposalKind::Signaling { return Err(GovernanceError::NotExecutable); }
         if env.ledger().sequence() < proposal.queue_ledger { return Err(GovernanceError::TimelockNotExpired); }
         
         // Check if execution grace period has expired
@@ -485,6 +539,7 @@ impl GovernanceContract {
         proposal.status = ProposalStatus::Executed;
         env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
         Self::touch_proposal(&env, proposal_id);
+        Self::record_status_change(&env, &ProposalStatus::Queued, &ProposalStatus::Executed);
         // TODO: dispatch on-chain actions encoded in proposal
 
         env.events().publish(
@@ -589,13 +644,47 @@ impl GovernanceContract {
             .ok_or(GovernanceError::ProposalNotFound)?;
         
         // Same quorum check as finalize()
-        let total = proposal
-            .for_votes
-            .checked_add(proposal.against_votes)
-            .and_then(|sum| sum.checked_add(proposal.abstain_votes))
-            .ok_or(GovernanceError::Overflow)?;
-        
+        let total = Self::total_votes(&proposal)?;
+
         Ok(total >= proposal.quorum_required)
+    }
+
+    /// Share of the quorum requirement that has voted so far, in basis points:
+    /// 5000 means half of quorum. Capped at 10000, so a proposal that has met or
+    /// exceeded quorum reports 10000. Uses the same tally as `finalize()`.
+    pub fn get_quorum_progress(env: Env, id: u64) -> Result<u32, GovernanceError> {
+        let proposal: Proposal = env.storage().persistent()
+            .get(&DataKey::Proposal(id)).ok_or(GovernanceError::ProposalNotFound)?;
+        // A zero requirement (zero supply) is met by any tally, including none.
+        if proposal.quorum_required <= 0 {
+            return Ok(MAX_QUORUM_PROGRESS_BPS);
+        }
+        let total = Self::total_votes(&proposal)?;
+        let progress = total
+            .checked_mul(BPS_DENOMINATOR)
+            .ok_or(GovernanceError::Overflow)?
+            / proposal.quorum_required;
+        u32::try_from(progress.min(i128::from(MAX_QUORUM_PROGRESS_BPS)))
+            .map_err(|_| GovernanceError::Overflow)
+    }
+
+    /// The lifecycle phase of a proposal at the current ledger. Read-only: it
+    /// computes the phase from the stored status and ledger window, so a
+    /// proposal whose grace period has lapsed reports `Expired` before anyone
+    /// calls `mark_expired()`.
+    pub fn get_proposal_phase(env: Env, id: u64) -> Result<ProposalPhase, GovernanceError> {
+        let proposal: Proposal = env.storage().persistent()
+            .get(&DataKey::Proposal(id)).ok_or(GovernanceError::ProposalNotFound)?;
+        let config: Config = Self::require_config(&env)?;
+        Ok(Self::phase_of(&proposal, env.ledger().sequence(), config.execution_grace_period))
+    }
+
+    /// Governance-wide counters, read in O(1). They are maintained by the calls
+    /// that create, vote on, finalize, execute, cancel or expire a proposal, and
+    /// start at zero on deployment. Proposals made by a deployment that predates
+    /// these counters are not included.
+    pub fn get_governance_stats(env: Env) -> GovernanceStats {
+        env.storage().instance().get(&DataKey::Stats).unwrap_or_default()
     }
 
     /// The choice `voter` recorded on `proposal_id` — 0 Against, 1 For,
@@ -619,9 +708,11 @@ impl GovernanceContract {
         if caller != proposal.proposer && caller != config.admin {
             return Err(GovernanceError::Unauthorized);
         }
+        let previous = proposal.status.clone();
         proposal.status = ProposalStatus::Cancelled;
         env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
         Self::touch_proposal(&env, proposal_id);
+        Self::record_status_change(&env, &previous, &ProposalStatus::Cancelled);
 
         env.events().publish(
             (Symbol::new(&env, "proposal_cancelled"), proposal_id),
@@ -713,6 +804,7 @@ impl GovernanceContract {
             proposal.status = ProposalStatus::Expired;
             env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
             Self::touch_proposal(&env, proposal_id);
+            Self::record_status_change(&env, &ProposalStatus::Queued, &ProposalStatus::Expired);
             Ok(())
         } else {
             Err(GovernanceError::TimelockNotExpired)
@@ -777,6 +869,79 @@ impl GovernanceContract {
             .checked_mul(i128::from(quorum_bps))
             .map(|scaled| scaled / BPS_DENOMINATOR)
             .ok_or(GovernanceError::Overflow)
+    }
+
+    /// Sum of the For, Against and Abstain tallies: the figure quorum is measured
+    /// against. Checked, so an overflowing sum is an error rather than a trap.
+    fn total_votes(proposal: &Proposal) -> Result<i128, GovernanceError> {
+        proposal
+            .for_votes
+            .checked_add(proposal.against_votes)
+            .and_then(|sum| sum.checked_add(proposal.abstain_votes))
+            .ok_or(GovernanceError::Overflow)
+    }
+
+    /// The phase of `proposal` at ledger `now`, from its stored status and ledger
+    /// window. Mirrors the checks in `vote()`, `execute()` and `mark_expired()`.
+    fn phase_of(proposal: &Proposal, now: u32, execution_grace_period: u32) -> ProposalPhase {
+        match &proposal.status {
+            ProposalStatus::Pending => ProposalPhase::Pending,
+            ProposalStatus::Active if now < proposal.start_ledger => ProposalPhase::Pending,
+            ProposalStatus::Active if now <= proposal.end_ledger => ProposalPhase::Active,
+            ProposalStatus::Active => ProposalPhase::Ended,
+            ProposalStatus::Queued if now < proposal.queue_ledger => ProposalPhase::Queued,
+            ProposalStatus::Queued
+                if execution_grace_period > 0
+                    && now > proposal.queue_ledger.saturating_add(execution_grace_period) =>
+            {
+                ProposalPhase::Expired
+            }
+            ProposalStatus::Queued if proposal.kind == ProposalKind::Signaling => ProposalPhase::Passed,
+            ProposalStatus::Queued => ProposalPhase::ReadyToExecute,
+            ProposalStatus::Passed => ProposalPhase::Passed,
+            ProposalStatus::Executed => ProposalPhase::Executed,
+            ProposalStatus::Failed => ProposalPhase::Failed,
+            ProposalStatus::Cancelled => ProposalPhase::Cancelled,
+            ProposalStatus::Expired => ProposalPhase::Expired,
+        }
+    }
+
+    /// Applies `apply` to the stored counters and writes them back.
+    fn update_stats(env: &Env, apply: impl FnOnce(&mut GovernanceStats)) {
+        let mut stats: GovernanceStats = env
+            .storage()
+            .instance()
+            .get(&DataKey::Stats)
+            .unwrap_or_default();
+        apply(&mut stats);
+        env.storage().instance().set(&DataKey::Stats, &stats);
+    }
+
+    /// Moves one proposal from the `from` counter to the `to` counter.
+    fn record_status_change(env: &Env, from: &ProposalStatus, to: &ProposalStatus) {
+        Self::update_stats(env, |stats| {
+            if let Some(counter) = Self::status_counter(stats, from) {
+                *counter = counter.saturating_sub(1);
+            }
+            if let Some(counter) = Self::status_counter(stats, to) {
+                *counter = counter.saturating_add(1);
+            }
+        });
+    }
+
+    /// The counter that tracks proposals in `status`. `Pending` and `Passed`
+    /// have none: nothing in the contract enters them, and `Passed` is a
+    /// signaling-only phase that `get_proposal_phase` reports.
+    fn status_counter<'a>(stats: &'a mut GovernanceStats, status: &ProposalStatus) -> Option<&'a mut u64> {
+        match status {
+            ProposalStatus::Active => Some(&mut stats.active),
+            ProposalStatus::Queued => Some(&mut stats.queued),
+            ProposalStatus::Executed => Some(&mut stats.executed),
+            ProposalStatus::Failed => Some(&mut stats.failed),
+            ProposalStatus::Cancelled => Some(&mut stats.cancelled),
+            ProposalStatus::Expired => Some(&mut stats.expired),
+            ProposalStatus::Pending | ProposalStatus::Passed => None,
+        }
     }
 }
 
