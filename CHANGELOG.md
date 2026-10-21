@@ -44,25 +44,21 @@ are marked **BREAKING** below.
 
 ### Added
 
-- Governance: `create_proposal_with_kind(..., kind)` opens a proposal as
-  `Signaling` (advisory, never executed) or `Executable`. Signaling proposals
-  go through the same vote and finalize lifecycle. (2026-10-21)
-- Governance: `get_proposal_phase(id)` returns a `ProposalPhase` computed from
-  the stored status and the current ledger, without writing storage. It
-  distinguishes `Pending`, `Active`, `Ended` (voting closed, not yet finalized),
-  `Queued`, `ReadyToExecute`, `Passed` (a signaling proposal past its timelock),
-  `Executed`, `Failed`, `Cancelled` and `Expired`, and reports `Expired` once the
-  grace period lapses even before `mark_expired()` is called. (2026-10-21)
-- Governance: `get_quorum_progress(id)` returns the share of the quorum
-  requirement that has voted, in basis points, capped at 10000. It uses the same
-  tally as `finalize()` and checked arithmetic, and returns `ProposalNotFound`
-  for an unknown id. (2026-10-21)
-- Governance: `get_governance_stats()` returns a `GovernanceStats` snapshot
-  (total, active, queued, executed, failed, cancelled and expired proposals, and
-  votes cast) in O(1). The counters are updated in place by `create_proposal`,
-  `vote`, `finalize`, `execute`, `cancel` and `mark_expired`, and start at zero
-  on deployment, so proposals made before this version are not counted.
-  (2026-10-21)
+- **Governance:** proposal deposits. `set_proposal_deposit` (admin) sets an
+  amount a proposer locks on creation. It is returned when the proposal passes
+  and burned when it fails or is cancelled while still held. `Config` gains a
+  `proposal_deposit` field, defaulting to `0`. (#256)
+- **Governance:** co-sponsored proposals. `create_cosponsored_proposal` lets up
+  to 10 co-sponsors sign with the proposer, and their combined live balance must
+  meet `proposal_threshold`. The design is recorded in `docs/architecture.md`.
+  (#253)
+- **Governance:** conviction voting. `create_conviction_proposal` decides the
+  outcome on support that halves every 3 days, so recent support counts more. The
+  curve is documented in the governance README. (#254)
+- **Governance:** execution allowlist. The admin manages `allow_target` and
+  `disallow_target`. A proposer can attach one no-argument call with
+  `set_proposal_action`, and `execute()` dispatches it only if the target is still
+  allowlisted. (#252)
 - Frontend: the app's own icon set — a favicon, a scalable `icon.svg` and an
   apple-touch icon in `app/`, plus a web manifest with the app's name, theme
   colour and 192/512 icons. The default Next.js favicon and the
