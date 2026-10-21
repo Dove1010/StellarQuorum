@@ -2826,3 +2826,400 @@ fn has_reached_quorum_errors_for_nonexistent_proposal() {
     let result = governance.try_has_reached_quorum(&999);
     assert_eq!(result, Err(Ok(GovernanceError::ProposalNotFound)));
 }
+
+// ============================================================================
+// Tests for Issue #259: get_quorum_progress view
+// ============================================================================
+
+#[test]
+fn quorum_progress_is_zero_before_anyone_votes() {
+    let env = Env::default();
+    let (_, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    assert_eq!(governance.get_quorum_progress(&proposal_id), 0);
+}
+
+#[test]
+fn quorum_progress_reports_a_partial_share_of_quorum() {
+    let env = Env::default();
+    let voter = Address::generate(&env);
+    // Quorum is 5% of 1_000_000, so 50_000 votes are required.
+    let (_, governance_id, proposal_id) =
+        open_with_holders(&env, 1_000_000, QUORUM_BPS, &[(voter.clone(), 25_000)]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    governance.vote(&voter, &proposal_id, &VOTE_FOR);
+
+    assert_eq!(governance.get_quorum_progress(&proposal_id), 5_000);
+}
+
+#[test]
+fn quorum_progress_is_full_exactly_when_quorum_is_met() {
+    let env = Env::default();
+    let voter = Address::generate(&env);
+    let (_, governance_id, proposal_id) =
+        open_with_holders(&env, 1_000_000, QUORUM_BPS, &[(voter.clone(), 50_000)]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    governance.vote(&voter, &proposal_id, &VOTE_FOR);
+
+    assert_eq!(governance.get_quorum_progress(&proposal_id), 10_000);
+    assert_eq!(governance.has_reached_quorum(&proposal_id), true);
+}
+
+#[test]
+fn quorum_progress_is_capped_once_quorum_is_exceeded() {
+    let env = Env::default();
+    let voter = Address::generate(&env);
+    let (_, governance_id, proposal_id) =
+        open_with_holders(&env, 1_000_000, QUORUM_BPS, &[(voter.clone(), 100_000)]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    governance.vote(&voter, &proposal_id, &VOTE_FOR);
+
+    // 100_000 of 50_000 required would be 20_000 bps uncapped.
+    assert_eq!(governance.get_quorum_progress(&proposal_id), 10_000);
+}
+
+#[test]
+fn quorum_progress_rejects_an_unknown_proposal() {
+    let env = Env::default();
+    let (_, _, governance_id) = deploy(&env, 1_000_000, QUORUM_BPS);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    assert_eq!(
+        governance.try_get_quorum_progress(&999),
+        Err(Ok(GovernanceError::ProposalNotFound))
+    );
+}
+
+// ============================================================================
+// Tests for Issue #258: get_proposal_phase view
+// ============================================================================
+
+#[test]
+fn phase_is_pending_before_the_voting_window_opens() {
+    let env = Env::default();
+    let (_, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    // Proposed at OPENED; the window starts at OPENED + 1.
+    assert_eq!(
+        governance.get_proposal_phase(&proposal_id),
+        ProposalPhase::Pending
+    );
+}
+
+#[test]
+fn phase_is_active_while_voting_is_open() {
+    let env = Env::default();
+    let (_, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+    let proposal = governance.get_proposal(&proposal_id);
+
+    env.ledger().set_sequence_number(proposal.start_ledger);
+    assert_eq!(governance.get_proposal_phase(&proposal_id), ProposalPhase::Active);
+
+    env.ledger().set_sequence_number(proposal.end_ledger);
+    assert_eq!(governance.get_proposal_phase(&proposal_id), ProposalPhase::Active);
+}
+
+#[test]
+fn phase_is_ended_when_voting_closes_but_before_finalize() {
+    let env = Env::default();
+    let (_, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    close_voting(&env, &governance, proposal_id);
+
+    assert_eq!(governance.get_proposal_phase(&proposal_id), ProposalPhase::Ended);
+    // The stored status has not moved: finalize() is still the only writer.
+    assert_eq!(
+        governance.get_proposal(&proposal_id).status,
+        ProposalStatus::Active
+    );
+}
+
+#[test]
+fn phase_is_queued_during_the_timelock_then_ready_to_execute() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+    queue_proposal(&env, &governance, &admin, proposal_id);
+    let queue_ledger = governance.get_proposal(&proposal_id).queue_ledger;
+
+    env.ledger().set_sequence_number(queue_ledger - 1);
+    assert_eq!(governance.get_proposal_phase(&proposal_id), ProposalPhase::Queued);
+
+    env.ledger().set_sequence_number(queue_ledger);
+    assert_eq!(
+        governance.get_proposal_phase(&proposal_id),
+        ProposalPhase::ReadyToExecute
+    );
+}
+
+#[test]
+fn phase_is_executed_after_execution() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+    queue_proposal(&env, &governance, &admin, proposal_id);
+    let queue_ledger = governance.get_proposal(&proposal_id).queue_ledger;
+    env.ledger().set_sequence_number(queue_ledger);
+
+    governance.execute(&Address::generate(&env), &proposal_id);
+
+    assert_eq!(
+        governance.get_proposal_phase(&proposal_id),
+        ProposalPhase::Executed
+    );
+}
+
+#[test]
+fn phase_is_expired_once_the_grace_period_lapses_even_before_mark_expired() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+    queue_proposal(&env, &governance, &admin, proposal_id);
+    let queue_ledger = governance.get_proposal(&proposal_id).queue_ledger;
+
+    // The deadline is inclusive, matching execute(): the proposal is still
+    // executable on the last ledger of its grace period.
+    env.ledger().set_sequence_number(queue_ledger + EXECUTION_GRACE);
+    assert_eq!(
+        governance.get_proposal_phase(&proposal_id),
+        ProposalPhase::ReadyToExecute
+    );
+
+    env.ledger().set_sequence_number(queue_ledger + EXECUTION_GRACE + 1);
+    assert_eq!(governance.get_proposal_phase(&proposal_id), ProposalPhase::Expired);
+    assert_eq!(
+        governance.get_proposal(&proposal_id).status,
+        ProposalStatus::Queued
+    );
+}
+
+#[test]
+fn phase_is_failed_when_finalized_without_quorum() {
+    let env = Env::default();
+    let (_, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    close_voting(&env, &governance, proposal_id);
+    assert_eq!(governance.finalize(&proposal_id), ProposalStatus::Failed);
+
+    assert_eq!(governance.get_proposal_phase(&proposal_id), ProposalPhase::Failed);
+}
+
+#[test]
+fn phase_is_cancelled_after_the_proposer_cancels() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    governance.cancel(&admin, &proposal_id);
+
+    assert_eq!(
+        governance.get_proposal_phase(&proposal_id),
+        ProposalPhase::Cancelled
+    );
+}
+
+#[test]
+fn phase_for_an_unknown_proposal_is_not_found() {
+    let env = Env::default();
+    let (_, _, governance_id) = deploy(&env, 1_000_000, QUORUM_BPS);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    assert_eq!(
+        governance.try_get_proposal_phase(&999),
+        Err(Ok(GovernanceError::ProposalNotFound))
+    );
+}
+
+// ============================================================================
+// Tests for Issue #260: ProposalKind (Signaling vs Executable)
+// ============================================================================
+
+/// Deploys with `admin` holding the whole supply, then opens one signaling
+/// proposal at `OPENED`. Returns (admin, governance id, proposal id).
+fn open_signaling(env: &Env) -> (Address, Address, u64) {
+    env.ledger().set_sequence_number(GENESIS);
+    let (admin, _, governance_id) = deploy(env, 1_000_000, QUORUM_BPS);
+    env.ledger().set_sequence_number(OPENED);
+    let proposal_id = GovernanceContractClient::new(env, &governance_id).create_proposal_with_kind(
+        &admin,
+        &String::from_str(env, "Signal support for a grant program"),
+        &String::from_str(env, "Advisory only; nothing is executed."),
+        &String::from_str(env, ""),
+        &ProposalKind::Signaling,
+    );
+    (admin, governance_id, proposal_id)
+}
+
+#[test]
+fn create_proposal_defaults_to_executable() {
+    let env = Env::default();
+    let (_, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    assert_eq!(
+        governance.get_proposal(&proposal_id).kind,
+        ProposalKind::Executable
+    );
+}
+
+#[test]
+fn create_proposal_with_kind_records_the_signaling_kind() {
+    let env = Env::default();
+    let (_, governance_id, proposal_id) = open_signaling(&env);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    assert_eq!(
+        governance.get_proposal(&proposal_id).kind,
+        ProposalKind::Signaling
+    );
+}
+
+#[test]
+fn signaling_proposal_goes_through_the_full_vote_and_finalize_lifecycle() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_signaling(&env);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    governance.vote(&admin, &proposal_id, &VOTE_FOR);
+    close_voting(&env, &governance, proposal_id);
+
+    assert_eq!(governance.finalize(&proposal_id), ProposalStatus::Queued);
+    assert_eq!(
+        governance.get_proposal(&proposal_id).status,
+        ProposalStatus::Queued
+    );
+}
+
+#[test]
+fn signaling_proposal_cannot_be_executed_even_after_its_timelock() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_signaling(&env);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+    queue_proposal(&env, &governance, &admin, proposal_id);
+    let queue_ledger = governance.get_proposal(&proposal_id).queue_ledger;
+    env.ledger().set_sequence_number(queue_ledger);
+
+    assert_eq!(
+        governance.try_execute(&Address::generate(&env), &proposal_id),
+        Err(Ok(GovernanceError::NotExecutable))
+    );
+    assert_eq!(
+        governance.get_proposal(&proposal_id).status,
+        ProposalStatus::Queued
+    );
+}
+
+#[test]
+fn signaling_proposal_reports_passed_rather_than_ready_to_execute() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_signaling(&env);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+    queue_proposal(&env, &governance, &admin, proposal_id);
+    let queue_ledger = governance.get_proposal(&proposal_id).queue_ledger;
+    env.ledger().set_sequence_number(queue_ledger);
+
+    assert_eq!(
+        governance.get_proposal_phase(&proposal_id),
+        ProposalPhase::Passed
+    );
+}
+
+// ============================================================================
+// Tests for Issue #261: get_governance_stats view
+// ============================================================================
+
+#[test]
+fn governance_stats_start_at_zero() {
+    let env = Env::default();
+    let (_, _, governance_id) = deploy(&env, 1_000_000, QUORUM_BPS);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    assert_eq!(governance.get_governance_stats(), GovernanceStats::default());
+}
+
+#[test]
+fn governance_stats_follow_each_status_change() {
+    let env = Env::default();
+    env.ledger().set_sequence_number(GENESIS);
+    let (admin, _, governance_id) = deploy(&env, 1_000_000, QUORUM_BPS);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+
+    env.ledger().set_sequence_number(OPENED);
+    let passing = propose(&env, &governance_id, &admin).id;
+    let failing = propose(&env, &governance_id, &admin).id;
+    let cancelled = propose(&env, &governance_id, &admin).id;
+    assert_eq!(
+        governance.get_governance_stats(),
+        GovernanceStats { total_proposals: 3, active: 3, ..Default::default() }
+    );
+
+    governance.vote(&admin, &passing, &VOTE_FOR);
+    governance.cancel(&admin, &cancelled);
+    close_voting(&env, &governance, passing);
+    assert_eq!(governance.finalize(&passing), ProposalStatus::Queued);
+    assert_eq!(governance.finalize(&failing), ProposalStatus::Failed);
+    assert_eq!(
+        governance.get_governance_stats(),
+        GovernanceStats {
+            total_proposals: 3,
+            active: 0,
+            queued: 1,
+            executed: 0,
+            failed: 1,
+            cancelled: 1,
+            expired: 0,
+            votes_cast: 1,
+        }
+    );
+
+    let queue_ledger = governance.get_proposal(&passing).queue_ledger;
+    env.ledger().set_sequence_number(queue_ledger);
+    governance.execute(&Address::generate(&env), &passing);
+    assert_eq!(
+        governance.get_governance_stats(),
+        GovernanceStats {
+            total_proposals: 3,
+            active: 0,
+            queued: 0,
+            executed: 1,
+            failed: 1,
+            cancelled: 1,
+            expired: 0,
+            votes_cast: 1,
+        }
+    );
+}
+
+#[test]
+fn governance_stats_count_expired_proposals() {
+    let env = Env::default();
+    let (admin, governance_id, proposal_id) = open_with_holders(&env, 1_000_000, QUORUM_BPS, &[]);
+    let governance = GovernanceContractClient::new(&env, &governance_id);
+    queue_proposal(&env, &governance, &admin, proposal_id);
+    let queue_ledger = governance.get_proposal(&proposal_id).queue_ledger;
+
+    env.ledger().set_sequence_number(queue_ledger + EXECUTION_GRACE + 1);
+    governance.mark_expired(&proposal_id);
+
+    assert_eq!(
+        governance.get_governance_stats(),
+        GovernanceStats {
+            total_proposals: 1,
+            active: 0,
+            queued: 0,
+            executed: 0,
+            failed: 0,
+            cancelled: 0,
+            expired: 1,
+            votes_cast: 1,
+        }
+    );
+}

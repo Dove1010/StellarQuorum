@@ -35,9 +35,34 @@ are marked **BREAKING** below.
   (`Overflow = 13`, `NoVotingPower = 14`) and `TokenError`
   (`InvalidExpiration = 7`). Clients that map error codes exhaustively need
   updating.
+- **BREAKING (governance):** `Proposal` has a new trailing field,
+  `kind: ProposalKind` (`Signaling` | `Executable`), so the XDR layout of a
+  stored proposal changed. Clients decoding `Proposal` by position must be
+  updated. `create_proposal()` keeps its signature and creates `Executable`
+  proposals. `execute()` on a `Signaling` proposal fails with the new
+  `NotExecutable = 24` error. (2026-10-21)
 
 ### Added
 
+- Governance: `create_proposal_with_kind(..., kind)` opens a proposal as
+  `Signaling` (advisory, never executed) or `Executable`. Signaling proposals
+  go through the same vote and finalize lifecycle. (2026-10-21)
+- Governance: `get_proposal_phase(id)` returns a `ProposalPhase` computed from
+  the stored status and the current ledger, without writing storage. It
+  distinguishes `Pending`, `Active`, `Ended` (voting closed, not yet finalized),
+  `Queued`, `ReadyToExecute`, `Passed` (a signaling proposal past its timelock),
+  `Executed`, `Failed`, `Cancelled` and `Expired`, and reports `Expired` once the
+  grace period lapses even before `mark_expired()` is called. (2026-10-21)
+- Governance: `get_quorum_progress(id)` returns the share of the quorum
+  requirement that has voted, in basis points, capped at 10000. It uses the same
+  tally as `finalize()` and checked arithmetic, and returns `ProposalNotFound`
+  for an unknown id. (2026-10-21)
+- Governance: `get_governance_stats()` returns a `GovernanceStats` snapshot
+  (total, active, queued, executed, failed, cancelled and expired proposals, and
+  votes cast) in O(1). The counters are updated in place by `create_proposal`,
+  `vote`, `finalize`, `execute`, `cancel` and `mark_expired`, and start at zero
+  on deployment, so proposals made before this version are not counted.
+  (2026-10-21)
 - Frontend: the app's own icon set — a favicon, a scalable `icon.svg` and an
   apple-touch icon in `app/`, plus a web manifest with the app's name, theme
   colour and 192/512 icons. The default Next.js favicon and the
