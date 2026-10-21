@@ -35,6 +35,12 @@ are marked **BREAKING** below.
   (`Overflow = 13`, `NoVotingPower = 14`) and `TokenError`
   (`InvalidExpiration = 7`). Clients that map error codes exhaustively need
   updating.
+- **BREAKING (governance):** `Proposal` has a new trailing field,
+  `kind: ProposalKind` (`Signaling` | `Executable`), so the XDR layout of a
+  stored proposal changed. Clients decoding `Proposal` by position must be
+  updated. `create_proposal()` keeps its signature and creates `Executable`
+  proposals. `execute()` on a `Signaling` proposal fails with the new
+  `NotExecutable = 24` error. (2026-10-21)
 
 ### Added
 
