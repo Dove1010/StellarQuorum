@@ -174,8 +174,13 @@ export class QuorumClient {
   async getVotingPower(voter: string, snapshotLedger: number, options?: ReadOptions): Promise<bigint> {
     return this.cache.read('getVotingPower', [voter, snapshotLedger], options, async () => {
       const token = await this.tokenContract(options);
-      return BigInt(await this.simulateOn<bigint | number>(token, 'get_past_balance', new Address(voter).toScVal(), nativeToScVal(snapshotLedger, { type: 'u32' })));
+      return BigInt(await this.simulateOn<bigint | number>(token, 'get_past_votes', new Address(voter).toScVal(), nativeToScVal(snapshotLedger, { type: 'u32' })));
     });
+  }
+
+  /** Current representative, including delegations made directly on the token. */
+  async getDelegate(holder: string): Promise<string> {
+    return this.simulate<string>('get_delegate', new Address(holder).toScVal());
   }
 
   async getBalance(voter: string, options?: ReadOptions): Promise<bigint> {
@@ -319,7 +324,8 @@ export class QuorumClient {
   }
 
   /**
-   * Balance of `owner` as of the end of `ledger` (snapshot voting power).
+   * Raw balance of `owner` as of the end of `ledger`, excluding delegation.
+   * Use `getVotingPower` for the effective weight at a proposal snapshot.
    */
   async getPastBalance(owner: string, ledger: number, options?: ReadOptions): Promise<bigint> {
     return this.cache.read('getPastBalance', [owner, ledger], options, () => this.simulateToken<bigint>(
@@ -563,6 +569,25 @@ export class QuorumClient {
       new Address(voter).toScVal(),
       nativeToScVal(proposalId, { type: 'u64' }),
       nativeToScVal(support, { type: 'u32' }),
+    );
+  }
+
+  /** Assign voting power without moving tokens. The holder must authorize. */
+  async buildDelegate(delegator: string, delegatee: string, source?: string): Promise<string> {
+    return this.buildGovernanceTransaction(
+      source ?? delegator,
+      'delegate',
+      new Address(delegator).toScVal(),
+      new Address(delegatee).toScVal(),
+    );
+  }
+
+  /** Clear delegation and restore the holder's own voting power. */
+  async buildUndelegate(delegator: string, source?: string): Promise<string> {
+    return this.buildGovernanceTransaction(
+      source ?? delegator,
+      'undelegate',
+      new Address(delegator).toScVal(),
     );
   }
 
