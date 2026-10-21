@@ -805,8 +805,10 @@ function formatTransactionFailure(response: { hash?: string; txHash?: string; er
 
 /** Resource fee a prepared Soroban transaction already declares; zero for classic transactions. */
 function declaredResourceFee(tx: Transaction): bigint {
-  const ext = tx.toEnvelope().v1().tx().ext();
-  return ext.arm() === 'sorobanData' ? BigInt(ext.sorobanData().resourceFee().toString()) : BigInt(0);
+  const envelope = tx.toEnvelope();
+  if (envelope.type !== 'envelopeTypeTx') return BigInt(0);
+  const ext = envelope.v1.tx.ext;
+  return ext.type === 'sorobanData' ? ext.sorobanData.resourceFee : BigInt(0);
 }
 
 // ─── Decoding ──────────────────────────────────────────────────────────────
