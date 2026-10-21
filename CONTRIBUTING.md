@@ -568,6 +568,20 @@ async getConfig(): Promise<GovernanceConfig> {
 - No `any` — use `unknown` if the type is genuinely unknown
 - Return types must be explicitly annotated (no implicit inference for public APIs)
 
+### Breaking Changes
+
+Before 1.0, a MINOR bump may break the API ([versioning policy](docs/publishing.md)).
+A PR that changes or removes a public SDK signature must:
+
+1. Add a section to [`sdk/MIGRATIONS.md`](sdk/MIGRATIONS.md) under the version
+   that will ship it, with `before` and `after` code and the reason for the change.
+2. Add an `Unreleased` entry to [`sdk/CHANGELOG.md`](sdk/CHANGELOG.md) that links
+   to that section.
+3. Add a codemod under `sdk/scripts/` when the change is mechanical, such as a
+   rename or an added or reordered parameter. Follow
+   [`codemod-fee-source.mjs`](sdk/scripts/codemod-fee-source.mjs): dry run by
+   default, `--write` to apply.
+
 ---
 
 ## Contributing to Documentation
